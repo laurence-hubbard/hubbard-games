@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Iron Precinct</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud" class="hidden">
+    <div id="topleft" class="panel">
+      <div class="label">HULL INTEGRITY</div>
+      <div class="bar"><div id="hp-fill"></div></div>
+      <div id="mode" class="stat">MODE: WALKER</div>
+      <div id="missiles" class="stat">MISSILES: 12</div>
+    </div>
+    <div id="topcenter">
+      <div id="objective"></div>
+      <div id="boss-bar" class="hidden">
+        <div class="label boss-label">SIEGEBREAKER</div>
+        <div class="bar boss"><div id="boss-fill"></div></div>
+      </div>
+    </div>
+    <div id="topright" class="panel">
+      <div class="label">SCORE</div>
+      <div id="score">0</div>
+    </div>
+    <canvas id="minimap" width="200" height="200"></canvas>
+    <div id="banner"></div>
+    <div id="toast"></div>
+    <div id="vignette"></div>
+  </div>
+
+  <div id="crosshair" class="hidden"></div>
+
+  <div id="screen">
+    <div class="screen-inner">
+      <h1 id="screen-title">IRON PRECINCT</h1>
+      <p id="screen-sub">Neo Harbor, 2097. Rogue signal jammers have cut the district off.<br/>Deploy the Warden mech. Take them down.</p>
+      <div id="controls">
+        <div><b>WASD</b> move</div>
+        <div><b>Mouse</b> aim</div>
+        <div><b>Left click</b> pulse cannons</div>
+        <div><b>Right click</b> homing missiles</div>
+        <div><b>Space / Q</b> transform walker ⇄ hover</div>
+        <div><b>P / Esc</b> pause</div>
+      </div>
+      <p id="screen-cta">CLICK TO DEPLOY</p>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

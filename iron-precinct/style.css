@@ -1,0 +1,37 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #05070c; font-family: "Consolas", "Menlo", monospace; color: #cfe8ff; user-select: none; }
+#game { display: block; width: 100vw; height: 100vh; cursor: none; }
+.hidden { display: none !important; }
+
+#hud { position: fixed; inset: 0; pointer-events: none; }
+.panel { position: absolute; padding: 10px 14px; background: rgba(8, 14, 28, 0.6); border: 1px solid rgba(95, 243, 255, 0.35); border-radius: 4px; }
+#topleft { top: 14px; left: 14px; width: 250px; }
+#topright { top: 14px; right: 228px; text-align: right; min-width: 120px; }
+#topcenter { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); text-align: center; width: 460px; }
+.label { font-size: 11px; letter-spacing: 2px; color: #7fb6d9; margin-bottom: 4px; }
+.stat { font-size: 13px; margin-top: 6px; letter-spacing: 1px; }
+.bar { height: 12px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(95, 243, 255, 0.4); }
+#hp-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #2bd9ff, #8ff7ff); transition: width 0.1s; }
+#hp-fill.low { background: linear-gradient(90deg, #ff2b4a, #ff8a5a); }
+#score { font-size: 22px; color: #fff; }
+#objective { font-size: 14px; letter-spacing: 1px; padding: 6px 12px; background: rgba(8, 14, 28, 0.6); border: 1px solid rgba(255, 210, 74, 0.45); color: #ffd24a; display: inline-block; }
+#boss-bar { margin-top: 10px; }
+.boss-label { color: #ff8a3a; }
+.bar.boss { height: 14px; border-color: rgba(255, 138, 58, 0.6); }
+#boss-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #c2571a, #ffb04a); }
+#minimap { position: absolute; top: 14px; right: 14px; width: 200px; height: 200px; border: 1px solid rgba(95, 243, 255, 0.45); background: rgba(5, 8, 16, 0.75); }
+#banner { position: absolute; top: 34%; width: 100%; text-align: center; font-size: 34px; letter-spacing: 6px; color: #fff; text-shadow: 0 0 18px #2bd9ff; opacity: 0; transition: opacity 0.3s; }
+#toast { position: absolute; bottom: 70px; width: 100%; text-align: center; font-size: 16px; color: #8fff9c; opacity: 0; transition: opacity 0.25s; }
+#vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(255, 20, 40, 0.65) 100%); opacity: 0; }
+
+#crosshair { position: fixed; width: 28px; height: 28px; margin: -14px 0 0 -14px; border: 2px solid #8ff7ff; border-radius: 50%; pointer-events: none; box-shadow: 0 0 8px #2bd9ff; }
+#crosshair::after { content: ""; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; background: #8ff7ff; border-radius: 50%; }
+
+#screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at center, rgba(10, 20, 40, 0.75), rgba(2, 4, 10, 0.95)); cursor: pointer; }
+.screen-inner { text-align: center; max-width: 640px; padding: 20px; }
+#screen-title { font-size: 64px; letter-spacing: 10px; margin: 0 0 12px; color: #fff; text-shadow: 0 0 24px #2bd9ff, 0 0 4px #fff; }
+#screen-sub { color: #9cc6e6; line-height: 1.6; }
+#controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; margin: 26px auto; text-align: left; max-width: 480px; font-size: 14px; }
+#controls b { color: #ffd24a; }
+#screen-cta { margin-top: 26px; font-size: 20px; letter-spacing: 4px; color: #8ff7ff; animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: 0.35; } }
