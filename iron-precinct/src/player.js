@@ -133,20 +133,7 @@ export class Player {
       g.audio.play('transform');
       g.effects.sparks(this.pos.clone().setY(2), 0x5ff3ff, 16);
     }
-    if (this.transformT > 0) {
-      this.transformT = Math.max(0, this.transformT - dt);
-      const t = 1 - this.transformT / TRANSFORM_TIME;
-      if (t >= 0.5 && this.nextMode) {
-        const old = this.meshFor(this.mode);
-        old.visible = false;
-        old.scale.y = 1;
-        this.mode = this.nextMode;
-        this.nextMode = null;
-        this.meshFor(this.mode).visible = true;
-      }
-      const cur = this.meshFor(this.mode);
-      cur.scale.y = this.transformT === 0 ? 1 : t < 0.5 ? 1 - t * 1.8 : 0.1 + (t - 0.5) * 1.8;
-    }
+    this.animateTransform(dt);
 
     // Movement.
     const st = this.stats;
@@ -170,6 +157,41 @@ export class Player {
     // Aim & animation.
     const ax = this.aim.x - this.pos.x, az = this.aim.z - this.pos.z;
     this.aimYaw = angleLerp(this.aimYaw, Math.atan2(ax, az), 1 - Math.exp(-18 * dt));
+    this.animate(dt);
+
+    // Weapons.
+    this.fireCd -= dt;
+    this.missileCd -= dt;
+    if (this.transformT <= 0) {
+      if (inp.fire && this.fireCd <= 0) { this.fire(st); this.fireCd = st.fireRate; }
+      if (inp.missile && this.missileCd <= 0 && this.missiles > 0) {
+        this.fireMissile();
+        this.missileCd = 0.3;
+        this.missiles--;
+      }
+    }
+  }
+
+  /** Walker <-> hover squash-and-swap animation. */
+  animateTransform(dt) {
+    if (this.transformT <= 0) return;
+    this.transformT = Math.max(0, this.transformT - dt);
+    const t = 1 - this.transformT / TRANSFORM_TIME;
+    if (t >= 0.5 && this.nextMode) {
+      const old = this.meshFor(this.mode);
+      old.visible = false;
+      old.scale.y = 1;
+      this.mode = this.nextMode;
+      this.nextMode = null;
+      this.meshFor(this.mode).visible = true;
+    }
+    const cur = this.meshFor(this.mode);
+    cur.scale.y = this.transformT === 0 ? 1 : t < 0.5 ? 1 - t * 1.8 : 0.1 + (t - 0.5) * 1.8;
+  }
+
+  /** Visual-only animation from pos / vel / aimYaw (runs on host and guest). */
+  animate(dt) {
+    const g = this.game;
     const sp = Math.hypot(this.vel.x, this.vel.z);
     if (sp > 0.5) this.moveYaw = angleLerp(this.moveYaw, Math.atan2(this.vel.x, this.vel.z), 1 - Math.exp(-10 * dt));
 
@@ -197,18 +219,50 @@ export class Player {
     this.lightRed.color.setHex(on ? 0xff1a2e : 0x2a0508);
     this.lightBlue.color.setHex(on ? 0x08102a : 0x1a5cff);
     this.root.position.copy(this.pos);
+  }
 
-    // Weapons.
-    this.fireCd -= dt;
-    this.missileCd -= dt;
-    if (this.transformT <= 0) {
-      if (inp.fire && this.fireCd <= 0) { this.fire(st); this.fireCd = st.fireRate; }
-      if (inp.missile && this.missileCd <= 0 && this.missiles > 0) {
-        this.fireMissile();
-        this.missileCd = 0.3;
-        this.missiles--;
-      }
+  // --- network sync (host -> guest) ---
+  netState() {
+    const r2 = (v) => Math.round(v * 100) / 100;
+    return {
+      s: this.slot, x: r2(this.pos.x), z: r2(this.pos.z), vx: r2(this.vel.x), vz: r2(this.vel.z),
+      ay: r2(this.aimYaw), m: this.nextMode || this.mode, hp: Math.ceil(this.hp), mi: this.missiles,
+      d: this.dead ? 1 : 0, k: this.kills,
+    };
+  }
+
+  applyNet(s) {
+    if (!this.netTarget) {
+      this.netTarget = new THREE.Vector3(s.x, 0, s.z);
+      this.pos.set(s.x, 0, s.z);
     }
+    this.netTarget.set(s.x, 0, s.z);
+    this.vel.set(s.vx, 0, s.vz);
+    this.netAimYaw = s.ay;
+    if (s.m !== (this.nextMode || this.mode) && this.transformT <= 0) {
+      this.nextMode = s.m;
+      this.transformT = TRANSFORM_TIME;
+    }
+    this.hp = s.hp;
+    this.missiles = s.mi;
+    this.kills = s.k;
+    const wasDead = this.dead;
+    this.dead = !!s.d;
+    if (wasDead && !this.dead) this.pos.copy(this.netTarget); // respawned: snap, don't glide across the map
+    this.root.visible = !this.dead;
+  }
+
+  /** Guest-side per-frame update: extrapolate by velocity, ease toward the snapshot, animate. */
+  netAnimate(dt) {
+    if (!this.netTarget) return;
+    this.netTarget.addScaledVector(this.vel, dt);
+    this.pos.addScaledVector(this.vel, dt);
+    const k = 1 - Math.exp(-12 * dt);
+    this.pos.x += (this.netTarget.x - this.pos.x) * k;
+    this.pos.z += (this.netTarget.z - this.pos.z) * k;
+    this.aimYaw = angleLerp(this.aimYaw, this.netAimYaw ?? this.aimYaw, 1 - Math.exp(-20 * dt));
+    this.animateTransform(dt);
+    this.animate(dt);
   }
 
   shotDir(from, spread = 0) {

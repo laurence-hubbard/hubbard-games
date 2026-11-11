@@ -21,7 +21,8 @@ const def = LEVELS[levelIndex];
 
 // Dev: ?mode=coop|versus runs a two-player game on one page (player 2 idle / test-driven).
 const devMode = ['coop', 'versus'].includes(params.get('mode')) ? params.get('mode') : 'solo';
-let game = createGame({ renderer, def, input, audio, mode: devMode, role: devMode === 'solo' ? 'solo' : 'host' });
+const devRole = devMode === 'solo' ? 'solo' : params.get('role') === 'guest' ? 'guest' : 'host';
+let game = createGame({ renderer, def, input, audio, mode: devMode, role: devRole, localSlot: devRole === 'guest' ? 2 : 1 });
 window.game = game; // handy for debugging in the console
 
 addEventListener('resize', () => {

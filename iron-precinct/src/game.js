@@ -7,6 +7,7 @@ import { Player } from './player.js';
 import { Pickups } from './pickups.js';
 import { HUD } from './hud.js';
 import { MODES, populate, onPlayerDown, updateMode } from './modes.js';
+import { recordEvents, buildSnapshot, applySnapshot } from './sync.js';
 
 const IDLE_INPUT = Object.freeze({ mx: 0, mz: 0, ax: 0, az: -1, fire: false, missile: false, tseq: 0 });
 const CAM_OFFSET = new THREE.Vector3(0, 36, 25);
@@ -113,6 +114,14 @@ export function createGame(opts) {
       }
     },
 
+    /** Show a pickup message to whoever picked it up (if that's us). */
+    toastFor(player, text) {
+      if (player === this.player) this.hud.toast(text);
+    },
+
+    buildSnapshot() { return buildSnapshot(this); },
+    applySnapshot(snap) { applySnapshot(this, snap); },
+
     onPlayerHurt(player) {
       if (player !== this.player) return;
       this.shake(0.25);
@@ -200,7 +209,17 @@ export function createGame(opts) {
     /** Advance the whole game by dt seconds (also used by automated tests). */
     step(dt) {
       const simulate = this.state === 'playing' || this.state === 'won' || this.state === 'lost';
-      if (simulate) {
+      if (simulate && this.role === 'guest') {
+        // The host simulates; we only send input and animate what it reports.
+        this.time += dt;
+        this.updateAim();
+        if (this.state === 'playing') this.lastInput = readLocalInput(this);
+        for (const p of this.players) p.netAnimate(dt);
+        this.enemies.netAnimate(dt);
+        this.projectiles.netAnimate(dt);
+        this.pickups.netAnimate(dt);
+        this.effects.update(dt);
+      } else if (simulate) {
         this.time += dt;
         this.updateAim();
         if (this.state === 'playing') {
@@ -253,7 +272,8 @@ export function createGame(opts) {
   }
   game.player = game.players[localSlot - 1];
   game.hud = new HUD(game);
-  populate(game);
+  if (role !== 'guest') populate(game);
+  if (role === 'host') recordEvents(game);
   camTarget.copy(game.player.pos);
   game.updateAim();
   return game;

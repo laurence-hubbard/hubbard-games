@@ -12,6 +12,36 @@ export class Pickups {
     this.list = [];
   }
 
+  /** Guest: match a snapshot list of {i, t, x, z}. */
+  applyNet(list) {
+    const seen = new Set(list.map((s) => s.i));
+    const have = new Set(this.list.map((it) => it.id));
+    for (const s of list) {
+      if (!have.has(s.i)) {
+        this.spawn(s.t, { x: s.x, z: s.z });
+        this.list[this.list.length - 1].id = s.i;
+      }
+    }
+    for (let i = this.list.length - 1; i >= 0; i--) {
+      if (!seen.has(this.list[i].id)) {
+        this.game.scene.remove(this.list[i].g);
+        this.list.splice(i, 1);
+      }
+    }
+  }
+
+  netState() {
+    return this.list.map((it) => ({ i: it.id, t: it.type, x: Math.round(it.g.position.x * 100) / 100, z: Math.round(it.g.position.z * 100) / 100 }));
+  }
+
+  /** Guest-side spin and bob. */
+  netAnimate(dt) {
+    for (const [i, it] of this.list.entries()) {
+      it.g.rotation.y += dt * 2;
+      it.g.position.y = 1.3 + Math.sin(this.game.time * 3 + i) * 0.25;
+    }
+  }
+
   spawn(type, pos) {
     const g = new THREE.Group();
     if (type === 'health') {
@@ -46,7 +76,7 @@ export class Pickups {
         }
         if (text) {
           take = true;
-          if (p === game.player) game.hud.toast(text);
+          game.toastFor(p, text);
           game.audio.play('pickup');
         }
       }

@@ -1,0 +1,85 @@
+<!doctype html>
+<html><body style="margin:0">
+<script type="module">
+import { check, openGame, run } from './harness.js';
+
+const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+const wire = (o) => JSON.parse(JSON.stringify(o)); // exactly what survives the network
+
+run(async () => {
+  const hf = await openGame('autostart&mode=coop', { width: 640, height: 400 });
+  const gf = await openGame('autostart&mode=coop&role=guest', { width: 640, height: 400 });
+  const host = hf.contentWindow.game, guest = gf.contentWindow.game;
+
+  let frame = 0;
+  /** One 60 fps tick of the pair: guest input -> host, host step, snapshot -> guest every other frame. */
+  function tick() {
+    guest.step(1 / 60);
+    if (guest.lastInput) host.remoteInputs[2] = wire(guest.lastInput);
+    host.step(1 / 60);
+    if (frame++ % 2 === 0) guest.applySnapshot(wire(host.buildSnapshot()));
+  }
+  const simPair = (sec, each) => { for (let i = 0; i < Math.round(sec * 60); i++) { tick(); each?.(); } };
+
+  check('guest_role', guest.role === 'guest' && guest.player === guest.players?.[1] && guest.enemies.list.length === 0,
+    `role=${guest.role} enemies=${guest.enemies.list.length}`);
+
+  const first = host.buildSnapshot();
+  check('sync_snapshot_size', JSON.stringify(first).length < 40000, `${JSON.stringify(first).length} bytes`);
+  guest.applySnapshot(wire(first));
+  const key = (l) => l.map((e) => `${e.id}:${e.type}`).sort().join(',');
+  check('sync_entities_match', key(host.enemies.list) === key(guest.enemies.list) && guest.enemies.list.length > 50,
+    `host ${host.enemies.list.length} guest ${guest.enemies.list.length}`);
+
+  // Host P1 drives right for 2 s.
+  host.input.keys.add('KeyD');
+  simPair(2);
+  host.input.keys.delete('KeyD');
+  check('sync_positions_close', dist(host.players[0].pos, guest.players[0].pos) < 0.5,
+    `host ${host.players[0].pos.x.toFixed(2)} guest ${guest.players[0].pos.x.toFixed(2)}`);
+
+  // Removal.
+  const drone = host.enemies.list.find((e) => e.type === 'drone');
+  const guestDrone = guest.enemies.list.find((e) => e.id === drone.id);
+  drone.damage(99999);
+  simPair(0.1);
+  let meshInScene = false;
+  guest.scene.traverse((o) => { if (o === guestDrone.mesh) meshInScene = true; });
+  check('sync_removal', !guest.enemies.list.some((e) => e.id === drone.id) && !meshInScene,
+    `stillListed=${guest.enemies.list.some((e) => e.id === drone.id)} meshInScene=${meshInScene}`);
+
+  // Events: explosion + hurt flashes only for the guest's own mech.
+  guest.effects.update(10); // clear old flashes
+  host.effects.explosion(host.players[0].pos.clone().setY(2), 2);
+  guest.applySnapshot(wire(host.buildSnapshot()));
+  const flashes = guest.effects.flashes.length;
+  guest.hud.hurtV = 0;
+  host.players[1].damage(5);
+  guest.applySnapshot(wire(host.buildSnapshot()));
+  const ownHurt = guest.hud.hurtV;
+  guest.hud.hurtV = 0;
+  host.players[0].damage(5);
+  guest.applySnapshot(wire(host.buildSnapshot()));
+  const otherHurt = guest.hud.hurtV;
+  check('sync_events_replayed', flashes > 0 && ownHurt > 0 && otherHurt === 0,
+    `flashes=${flashes} ownHurt=${ownHurt} otherHurt=${otherHurt}`);
+
+  // Guest input drives P2 on the host, and the guest sees it.
+  const x0 = host.players[1].pos.x;
+  guest.input.keys.add('KeyD');
+  simPair(1);
+  guest.input.keys.delete('KeyD');
+  simPair(0.2);
+  check('sync_guest_inputs_drive_p2', host.players[1].pos.x - x0 > 5 && dist(host.players[1].pos, guest.players[1].pos) < 1,
+    `moved ${(host.players[1].pos.x - x0).toFixed(1)} gap ${dist(host.players[1].pos, guest.players[1].pos).toFixed(2)}`);
+
+  // Projectiles show up on the guest.
+  host.input.mouse.left = true;
+  simPair(0.3);
+  host.input.mouse.left = false;
+  const hostBullets = host.projectiles.list.filter((p) => p.type === 'bullet').length;
+  const guestBullets = guest.projectiles.list.filter((p) => p.type === 'bullet').length;
+  check('sync_projectiles', hostBullets > 0 && Math.abs(hostBullets - guestBullets) <= 1, `host ${hostBullets} guest ${guestBullets}`);
+});
+</script>
+</body></html>
