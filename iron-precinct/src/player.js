@@ -9,8 +9,14 @@ const TRANSFORM_TIME = 0.4;
 export const MAX_MISSILES = 20;
 
 export class Player {
-  constructor(game, x, z) {
+  constructor(game, x, z, { slot = 1, accent = 0x1f5fd1 } = {}) {
     this.game = game;
+    this.slot = slot;
+    this.accent = accent;
+    this.kills = 0;
+    this.respawnT = 0;
+    this.lastTseq = 0;
+    this.aim = new THREE.Vector3(x, 0, z - 10);
     this.pos = new THREE.Vector3(x, 0, z);
     this.vel = new THREE.Vector3();
     this.radius = 1.6;
@@ -44,7 +50,7 @@ export class Player {
   buildWalker() {
     const hull = new THREE.MeshStandardMaterial({ color: 0xdfe6f0, roughness: 0.45, metalness: 0.5 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x2a3140, roughness: 0.6, metalness: 0.6 });
-    const accent = new THREE.MeshStandardMaterial({ color: 0x1f5fd1, roughness: 0.4, metalness: 0.4 });
+    const accent = new THREE.MeshStandardMaterial({ color: this.accent, roughness: 0.4, metalness: 0.4 });
     const glow = new THREE.MeshBasicMaterial({ color: 0x5ff3ff });
 
     const g = (this.walker = new THREE.Group());
@@ -88,7 +94,7 @@ export class Player {
   buildHover() {
     const hull = new THREE.MeshStandardMaterial({ color: 0xdfe6f0, roughness: 0.4, metalness: 0.55 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x2a3140, roughness: 0.6, metalness: 0.6 });
-    const accent = new THREE.MeshStandardMaterial({ color: 0x1f5fd1, roughness: 0.4, metalness: 0.4 });
+    const accent = new THREE.MeshStandardMaterial({ color: this.accent, roughness: 0.4, metalness: 0.4 });
     const glass = new THREE.MeshStandardMaterial({ color: 0x0a2a3a, emissive: 0x0c6d8a, roughness: 0.2, metalness: 0.8 });
     const glow = new THREE.MeshBasicMaterial({ color: 0x5ff3ff });
 
@@ -112,12 +118,16 @@ export class Player {
 
   meshFor(mode) { return mode === 'walker' ? this.walker : this.hover; }
 
-  update(dt) {
+  /** inp: InputState { mx, mz, ax, az, fire, missile, tseq } */
+  update(dt, inp) {
     if (this.dead) return;
-    const g = this.game, inp = g.input;
+    const g = this.game;
+    this.aim.set(inp.ax, 0, inp.az);
 
     // Transform walker <-> hover.
-    if ((inp.pressed('Space') || inp.pressed('KeyQ')) && this.transformT <= 0) {
+    const wantsTransform = inp.tseq !== this.lastTseq;
+    this.lastTseq = inp.tseq;
+    if (wantsTransform && this.transformT <= 0) {
       this.nextMode = this.mode === 'walker' ? 'hover' : 'walker';
       this.transformT = TRANSFORM_TIME;
       g.audio.play('transform');
@@ -140,11 +150,7 @@ export class Player {
 
     // Movement.
     const st = this.stats;
-    let mx = 0, mz = 0;
-    if (inp.down('KeyW') || inp.down('ArrowUp')) mz -= 1;
-    if (inp.down('KeyS') || inp.down('ArrowDown')) mz += 1;
-    if (inp.down('KeyA') || inp.down('ArrowLeft')) mx -= 1;
-    if (inp.down('KeyD') || inp.down('ArrowRight')) mx += 1;
+    let mx = inp.mx || 0, mz = inp.mz || 0;
     const len = Math.hypot(mx, mz);
     if (len > 0) { mx /= len; mz /= len; }
     const speed = st.speed * (this.transformT > 0 ? 0.4 : 1);
@@ -162,7 +168,7 @@ export class Player {
     }
 
     // Aim & animation.
-    const ax = g.aimPoint.x - this.pos.x, az = g.aimPoint.z - this.pos.z;
+    const ax = this.aim.x - this.pos.x, az = this.aim.z - this.pos.z;
     this.aimYaw = angleLerp(this.aimYaw, Math.atan2(ax, az), 1 - Math.exp(-18 * dt));
     const sp = Math.hypot(this.vel.x, this.vel.z);
     if (sp > 0.5) this.moveYaw = angleLerp(this.moveYaw, Math.atan2(this.vel.x, this.vel.z), 1 - Math.exp(-10 * dt));
@@ -196,8 +202,8 @@ export class Player {
     this.fireCd -= dt;
     this.missileCd -= dt;
     if (this.transformT <= 0) {
-      if (inp.mouse.left && this.fireCd <= 0) { this.fire(st); this.fireCd = st.fireRate; }
-      if (inp.mouse.right && this.missileCd <= 0 && this.missiles > 0) {
+      if (inp.fire && this.fireCd <= 0) { this.fire(st); this.fireCd = st.fireRate; }
+      if (inp.missile && this.missileCd <= 0 && this.missiles > 0) {
         this.fireMissile();
         this.missileCd = 0.3;
         this.missiles--;
@@ -206,7 +212,7 @@ export class Player {
   }
 
   shotDir(from, spread = 0) {
-    const aim = this.game.aimPoint;
+    const aim = this.aim;
     let dx = aim.x - from.x, dz = aim.z - from.z;
     if (Math.hypot(dx, dz) < 4) { dx = Math.sin(this.aimYaw); dz = Math.cos(this.aimYaw); }
     const a = Math.atan2(dx, dz) + spread + (Math.random() - 0.5) * 0.03;
@@ -226,7 +232,7 @@ export class Player {
     }
     for (const [m, spread] of muzzles) {
       g.projectiles.spawn({
-        type: 'bullet', owner: 'player', pos: m, dir: this.shotDir(m, spread),
+        type: 'bullet', owner: 'player', ownerSlot: this.slot, pos: m, dir: this.shotDir(m, spread),
         speed: st.bulletSpeed, dmg: st.dmg, life: 0.9, radius: 0.5,
       });
       g.effects.muzzle(m);
@@ -237,9 +243,9 @@ export class Player {
   fireMissile() {
     const g = this.game;
     const from = this.pos.clone().setY(4.6);
-    const target = g.enemies.nearestTarget(g.aimPoint, 14);
+    const target = g.enemies.nearestTarget(this.aim, 14);
     g.projectiles.spawn({
-      type: 'missile', owner: 'player', pos: from, dir: this.shotDir(from, (Math.random() - 0.5) * 0.6),
+      type: 'missile', owner: 'player', ownerSlot: this.slot, pos: from, dir: this.shotDir(from, (Math.random() - 0.5) * 0.6),
       speed: 18, dmg: 42, splash: 4.5, life: 3, radius: 0.6, target,
     });
     g.audio.play('missile');
@@ -252,19 +258,18 @@ export class Player {
 
   heal(n) { this.hp = Math.min(this.maxHp, this.hp + n); }
 
-  damage(n) {
+  /** sourceSlot: the player who caused the damage (versus), if any. */
+  damage(n, sourceSlot) {
     const g = this.game;
     if (this.dead || g.state !== 'playing') return;
     this.hp -= n * this.stats.armor;
-    g.shake(0.25);
-    g.hud.hurt();
-    g.audio.play('hurt');
+    g.onPlayerHurt(this);
     if (this.hp <= 0) {
       this.hp = 0;
       this.dead = true;
       this.root.visible = false;
       g.effects.explosion(this.pos.clone().setY(2), 4);
-      g.onPlayerDead();
+      g.onPlayerDown(this, sourceSlot);
     }
   }
 }

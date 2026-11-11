@@ -10,6 +10,7 @@ const orangeGlow = new THREE.MeshBasicMaterial({ color: 0xff7a1a });
 class Enemy {
   constructor(game, type, pos, hp, radius) {
     this.game = game;
+    this.id = game.nextId();
     this.type = type;
     this.pos = pos.clone();
     this.pos.y = 0;
@@ -39,8 +40,10 @@ class Enemy {
     return m;
   }
 
-  damage(n) {
+  /** sourceSlot: the player whose shot did this, for kill credit. */
+  damage(n, sourceSlot) {
     if (!this.alive) return;
+    if (sourceSlot) this.lastHitBy = sourceSlot;
     this.hp -= n;
     this.flashT = 0.08;
     this.dormant = false;
@@ -53,16 +56,22 @@ class Enemy {
     g.scene.remove(this.mesh);
     g.effects.explosion(this.pos.clone().setY(this.deathY), this.boomSize);
     g.addScore(this.score);
+    const killer = this.lastHitBy && g.players[this.lastHitBy - 1];
+    if (killer && this.type !== 'crate') killer.kills++;
     if (Math.random() < this.dropChance) g.pickups.spawn(Math.random() < 0.5 ? 'health' : 'ammo', this.pos);
     this.onDeath?.();
   }
 
   baseUpdate(dt) {
-    const p = this.game.player;
-    this.dx = p.pos.x - this.pos.x;
-    this.dz = p.pos.z - this.pos.z;
-    this.dist = Math.hypot(this.dx, this.dz) || 0.0001;
-    if (this.dormant && this.dist < this.wakeRange && !p.dead) this.dormant = false;
+    const p = (this.target = this.game.nearestPlayer(this.pos));
+    if (p) {
+      this.dx = p.pos.x - this.pos.x;
+      this.dz = p.pos.z - this.pos.z;
+      this.dist = Math.hypot(this.dx, this.dz) || 0.0001;
+    } else {
+      this.dx = 0; this.dz = 1; this.dist = Infinity;
+    }
+    if (this.dormant && this.dist < this.wakeRange) this.dormant = false;
     if (this.flashT > 0) this.flashT -= dt;
     const want = this.flashT > 0;
     if (want !== this.flashing) {
@@ -72,11 +81,11 @@ class Enemy {
   }
 
   canSeePlayer(y = 2) {
-    return this.game.level.lineOfSight(this.pos, this.game.player.pos, y);
+    return !!this.target && this.game.level.lineOfSight(this.pos, this.target.pos, y);
   }
 
   fireBolt(from, speed, dmg, yawOffset = 0) {
-    const p = this.game.player.pos;
+    const p = this.target.pos;
     const a = Math.atan2(p.x - from.x, p.z - from.z) + yawOffset;
     this.game.projectiles.spawn({
       type: 'bolt', owner: 'enemy', pos: from, dir: new THREE.Vector3(Math.sin(a), 0, Math.cos(a)),
@@ -132,7 +141,7 @@ export class Drone extends Enemy {
     this.mesh.rotation.y = Math.atan2(this.dx, this.dz);
 
     this.fireCd -= dt;
-    if (this.fireCd <= 0 && this.dist < 26 && !g.player.dead) {
+    if (this.fireCd <= 0 && this.dist < 26 && this.target) {
       if (this.canSeePlayer(this.alt)) {
         this.fireBolt(this.mesh.position.clone(), 20, 6);
         this.fireCd = 1.5 + Math.random() * 0.9;
@@ -179,7 +188,7 @@ export class Turret extends Enemy {
         const hy = this.head.rotation.y;
         this.fireBolt(new THREE.Vector3(this.pos.x + Math.sin(hy) * 2, 1.4, this.pos.z + Math.cos(hy) * 2), 24, 7);
       }
-    } else if (this.fireCd <= 0 && this.dist < 32 && !g.player.dead) {
+    } else if (this.fireCd <= 0 && this.dist < 32 && this.target) {
       if (this.canSeePlayer(1.4)) { this.burst = 3; this.burstT = 0; this.fireCd = 2.6; }
       else this.fireCd = 0.6;
     }
@@ -218,12 +227,12 @@ export class Rammer extends Enemy {
 
   update(dt) {
     this.baseUpdate(dt);
-    if (this.dormant) return;
-    const g = this.game, p = g.player;
+    const g = this.game, p = this.target;
+    if (this.dormant || !p) return;
     if (this.state === 'chase') {
       this.yaw = angleLerp(this.yaw, Math.atan2(this.dx, this.dz), 1 - Math.exp(-2.5 * dt));
       this.speed = Math.min(this.speed + 18 * dt, 15);
-      if (this.dist < this.radius + p.radius + 0.4 && !p.dead) {
+      if (this.dist < this.radius + p.radius + 0.4) {
         p.damage(14);
         p.knock(this.dx / this.dist, this.dz / this.dist, 14);
         g.effects.sparks(p.pos.clone().setY(1.5), 0xffd04a, 10);
@@ -286,7 +295,7 @@ export class Jammer extends Enemy {
     this.dish.rotation.y += dt * 1.5;
     this.core.scale.setScalar(1 + 0.25 * Math.sin(t * 6));
     this.ring.material.opacity = 0.35 + 0.3 * Math.sin(t * 4);
-    if (this.dormant || g.player.dead) return;
+    if (this.dormant || !this.target) return;
     this.spawnT -= dt;
     if (this.spawnT <= 0 && this.dist < 50) {
       this.spawnT = 7;
@@ -353,8 +362,9 @@ export class Boss extends Enemy {
 
   update(dt) {
     this.baseUpdate(dt);
-    const g = this.game, p = g.player;
+    const g = this.game, p = this.target;
     const enraged = this.hp < this.maxHp * 0.5;
+    if (!p) { this.mesh.position.set(this.pos.x, 0, this.pos.z); return; }
     this.yaw = angleLerp(this.yaw, Math.atan2(this.dx, this.dz), 1 - Math.exp(-1.2 * dt));
     let speed = 0;
     if (this.dist > 20) speed = enraged ? 6 : 4.5;
@@ -371,7 +381,6 @@ export class Boss extends Enemy {
     this.mesh.rotation.y = this.yaw;
     this.core.scale.setScalar(1 + 0.15 * Math.sin(g.time * (enraged ? 14 : 6)));
 
-    if (p.dead) return;
     if (this.volley) {
       this.volley.t -= dt;
       if (this.volley.t <= 0) {
@@ -493,12 +502,12 @@ export class Enemies {
     }
   }
 
-  damageArea(pos, radius, dmg) {
+  damageArea(pos, radius, dmg, sourceSlot) {
     for (const e of [...this.list]) {
       if (!e.alive) continue;
       const d = Math.hypot(pos.x - e.pos.x, pos.z - e.pos.z);
       const reach = radius + e.radius;
-      if (d < reach) e.damage(dmg * (1 - 0.5 * (d / reach)));
+      if (d < reach) e.damage(dmg * (1 - 0.5 * (d / reach)), sourceSlot);
     }
   }
 }

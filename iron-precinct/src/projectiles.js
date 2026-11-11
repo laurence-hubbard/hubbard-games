@@ -24,7 +24,7 @@ export class Projectiles {
     mesh.position.copy(o.pos);
     mesh.rotation.y = Math.atan2(o.dir.x, o.dir.z);
     this.game.scene.add(mesh);
-    const p = { ...o, mesh, vel: o.dir.clone().normalize().multiplyScalar(o.speed), age: 0, trailT: 0 };
+    const p = { ...o, id: this.game.nextId(), mesh, vel: o.dir.clone().normalize().multiplyScalar(o.speed), age: 0, trailT: 0 };
     this.list.push(p);
     return p;
   }
@@ -39,12 +39,12 @@ export class Projectiles {
     ring.position.set(target.x, 0.3, target.z);
     ring.scale.setScalar(splash);
     this.game.scene.add(mesh, ring);
-    this.list.push({ type: 'mortar', owner: 'enemy', from: from.clone(), target: target.clone(), T, age: 0, dmg, splash, mesh, ring });
+    this.list.push({ id: this.game.nextId(), type: 'mortar', owner: 'enemy', from: from.clone(), target: target.clone(), T, age: 0, dmg, splash, mesh, ring });
   }
 
   explode(p, pos) {
     this.game.effects.explosion(pos, 1.3);
-    this.game.damageArea(pos, p.splash, p.dmg, p.owner);
+    this.game.damageArea(pos, p.splash, p.dmg, p.owner, p.ownerSlot);
   }
 
   update(dt) {
@@ -90,17 +90,19 @@ export class Projectiles {
             dead = true;
             if (p.splash) this.explode(p, pos.clone());
             else {
-              e.damage(p.dmg);
+              e.damage(p.dmg, p.ownerSlot);
               g.effects.sparks(pos, COLORS.bullet, 5);
               g.audio.play('hit');
             }
           }
         } else {
-          const pl = g.player;
-          if (!pl.dead && Math.hypot(pos.x - pl.pos.x, pos.z - pl.pos.z) < pl.radius + p.radius) {
-            pl.damage(p.dmg);
-            g.effects.sparks(pos, COLORS[p.type], 6);
-            dead = true;
+          for (const pl of g.players) {
+            if (!pl.dead && Math.hypot(pos.x - pl.pos.x, pos.z - pl.pos.z) < pl.radius + p.radius) {
+              pl.damage(p.dmg);
+              g.effects.sparks(pos, COLORS[p.type], 6);
+              dead = true;
+              break;
+            }
           }
         }
       }
