@@ -48,6 +48,7 @@ class WSConn:
         self.writer = writer
         self.lock = asyncio.Lock()
         self.closed = False
+        self.last_seen = asyncio.get_running_loop().time()
 
     async def send_frame(self, opcode, payload: bytes):
         if self.closed:
@@ -84,6 +85,7 @@ class WSConn:
             raise ProtocolError("frame too large")
         mask = await self.reader.readexactly(4)
         data = await self.reader.readexactly(n)
+        self.last_seen = asyncio.get_running_loop().time()
         if n:
             key = (mask * (n // 4 + 1))[:n]
             data = (int.from_bytes(data, "big") ^ int.from_bytes(key, "big")).to_bytes(n, "big")
@@ -160,7 +162,20 @@ class Lobby:
         await self.broadcast(self.state())
 
 
-async def handle_ws(reader, writer, headers, lobby):
+async def heartbeat(conn, slot, ping_interval, idle_timeout):
+    """Ping the browser regularly; drop it if it goes silent (lid closed, wifi gone, process killed).
+    Browsers answer pings automatically, so a live tab is never dropped."""
+    loop = asyncio.get_running_loop()
+    while not conn.closed:
+        await asyncio.sleep(ping_interval)
+        if loop.time() - conn.last_seen > idle_timeout:
+            log(f"player {slot} timed out")
+            conn.writer.transport.abort()  # wakes the reader loop, which frees the slot
+            return
+        await conn.send_frame(9, b"hb")
+
+
+async def handle_ws(reader, writer, headers, lobby, ping_interval, idle_timeout):
     key = headers.get("sec-websocket-key")
     if not key:
         writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
@@ -185,6 +200,7 @@ async def handle_ws(reader, writer, headers, lobby):
     await conn.send({"t": "welcome", "slot": slot})
     await lobby.broadcast(lobby.state())
     code = 1000
+    beat = asyncio.ensure_future(heartbeat(conn, slot, ping_interval, idle_timeout))
     try:
         while True:
             opcode, payload = await conn.recv()
@@ -204,6 +220,7 @@ async def handle_ws(reader, writer, headers, lobby):
     except (asyncio.IncompleteReadError, ConnectionError):
         pass
     finally:
+        beat.cancel()
         if lobby.slots.get(slot) is conn:
             await lobby.leave(slot)
         await conn.close(code)
@@ -240,7 +257,7 @@ async def serve_static(writer, root, path, method):
         writer.close()
 
 
-async def handle_client(reader, writer, root, lobby):
+async def handle_client(reader, writer, root, lobby, ping_interval, idle_timeout):
     try:
         request = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 10)
         lines = request.decode("latin-1").split("\r\n")
@@ -252,19 +269,20 @@ async def handle_client(reader, writer, root, lobby):
                 headers[k.strip().lower()] = v.strip()
         path = urlsplit(target).path
         if path == "/ws" and headers.get("upgrade", "").lower() == "websocket":
-            await handle_ws(reader, writer, headers, lobby)
+            await handle_ws(reader, writer, headers, lobby, ping_interval, idle_timeout)
         else:
             await serve_static(writer, root, path, method)
     except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError, ValueError, ConnectionError):
         writer.close()
 
 
-async def serve(root, hosts, port):
+async def serve(root, hosts, port, ping_interval=5.0, idle_timeout=15.0):
     """Start listening on each host. Returns the asyncio servers (already serving)."""
     lobby = Lobby()
     servers = []
     for host in hosts:
-        servers.append(await asyncio.start_server(lambda r, w: handle_client(r, w, root, lobby), host, port))
+        servers.append(await asyncio.start_server(
+            lambda r, w: handle_client(r, w, root, lobby, ping_interval, idle_timeout), host, port))
     return servers
 
 

@@ -86,11 +86,27 @@ export function createGame(opts) {
     players: [],
     player: null,
     remoteInputs: {},
+    remoteInputAt: {},
     net: net || null,
     snapT: 0,
     localTseq: 0,
 
     nextId() { return ++idCounter; },
+
+    /** Host: latest controls from a remote player (stamped with sim time so stale ones expire). */
+    setRemoteInput(slot, inp) {
+      this.remoteInputs[slot] = inp;
+      this.remoteInputAt[slot] = this.time;
+    },
+
+    /** A remote player's controls; idle if they've gone quiet for 0.3 s (laptop asleep, tab hidden). */
+    remoteInputFor(slot) {
+      const inp = this.remoteInputs[slot];
+      if (!inp) return IDLE_INPUT;
+      const at = this.remoteInputAt[slot];
+      if (at !== undefined && this.time - at > 0.3) return { ...IDLE_INPUT, ax: inp.ax, az: inp.az, tseq: inp.tseq };
+      return inp;
+    },
     shake(a) { this.shakeAmt = Math.min(1.2, Math.max(this.shakeAmt, a)); },
     addScore(n) { this.score += n; },
     after(t, fn) { this.timers.push({ t, fn }); },
@@ -244,7 +260,7 @@ export function createGame(opts) {
         if (this.state === 'playing') {
           const local = readLocalInput(this);
           for (const p of this.players) {
-            p.update(dt, p.slot === this.localSlot ? local : this.remoteInputs[p.slot] || IDLE_INPUT);
+            p.update(dt, p.slot === this.localSlot ? local : this.remoteInputFor(p.slot));
           }
           updateMode(this, dt);
         }

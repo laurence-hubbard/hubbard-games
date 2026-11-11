@@ -78,6 +78,23 @@ run(async () => {
   check('guest_moves_on_both', G(A).players[1].pos.x - x0 > 5 && dist(G(A).players[1].pos, G(B).players[1].pos) < 1,
     `moved ${(G(A).players[1].pos.x - x0).toFixed(1)} gap ${dist(G(A).players[1].pos, G(B).players[1].pos).toFixed(2)}`);
 
+  // Guest goes silent mid-move (lid closed while holding D): the host must stop applying the stale input.
+  // Put P2 on the long open road along the south edge, heading east, so walls can't stop it.
+  G(A).players[1].pos.set(-100, 0, 119);
+  await pump(A, B, 0.3);
+  G(B).input.keys.add('KeyD');
+  await pump(A, B, 0.5);
+  const guestStep = G(B).step;
+  G(B).step = () => {};
+  await pump(A, null, 0.5);
+  const xStale = G(A).players[1].pos.x;
+  await pump(A, null, 1);
+  G(B).step = guestStep;
+  G(B).input.keys.delete('KeyD');
+  check('stale_guest_input_expires', Math.abs(G(A).players[1].pos.x - xStale) < 0.5,
+    `P2 kept moving ${(G(A).players[1].pos.x - xStale).toFixed(1)} units after the guest went silent`);
+  await pump(A, B, 0.3);
+
   // Guest shoots a jammer.
   const jam = G(A).enemies.list.find((e) => e.type === 'jammer');
   G(A).players[1].pos.set(jam.pos.x, 0, jam.pos.z + 10);
@@ -127,6 +144,9 @@ run(async () => {
     G(A).players[0].kills === 1 && G(B).players[0].kills === 1,
     `A ${G(A).mode.name} kills ${G(A).players[0].kills} | B ${G(B).mode.name} sees ${G(B).players[0].kills}`);
 
+  check('hud_resets_between_matches', doc(A).getElementById('partner').offsetParent === null &&
+    doc(B).getElementById('partner').offsetParent === null && text(A, 'score-label') === 'KILLS',
+    `partner visible: host=${doc(A).getElementById('partner').offsetParent !== null} guest=${doc(B).getElementById('partner').offsetParent !== null}`);
   check('hud_versus_scoreboard', text(A, 'score') === 'YOU 1 — 0 RIVAL' && text(B, 'score') === 'YOU 0 — 1 RIVAL',
     `host "${text(A, 'score')}" guest "${text(B, 'score')}"`);
 

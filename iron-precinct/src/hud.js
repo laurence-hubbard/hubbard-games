@@ -116,16 +116,15 @@ export class HUD {
     this.set('mode', el.mode, 'textContent', 'MODE: ' + p.stats.label);
     this.set('mis', el.missiles, 'textContent', 'MISSILES: ' + p.missiles);
     const rival = game.players.find((q) => q !== p);
-    if (game.mode.name === 'versus' && rival) {
-      this.set('scoreLabel', el.scoreLabel, 'textContent', 'KILLS');
-      this.set('score', el.score, 'textContent', `YOU ${p.kills} — ${rival.kills} RIVAL`);
-    } else {
-      this.set('score', el.score, 'textContent', String(game.score));
-    }
-    if (game.mode.name === 'coop' && rival) {
+    // The HUD elements outlive a match, so always set mode-specific lines (never leave last match's).
+    const versus = game.mode.name === 'versus' && rival;
+    const coop = game.mode.name === 'coop' && rival;
+    this.set('scoreLabel', el.scoreLabel, 'textContent', versus ? 'KILLS' : 'SCORE');
+    this.set('score', el.score, 'textContent', versus ? `YOU ${p.kills} — ${rival.kills} RIVAL` : String(game.score));
+    this.set('partnerOn', el.partner, 'className', coop ? 'stat' : 'stat hidden');
+    if (coop) {
       const txt = rival.dead ? 'PARTNER  DOWN — respawning' : `PARTNER  ${Math.round((rival.hp / rival.maxHp) * 100)}%`;
       this.set('partner', el.partner, 'textContent', txt);
-      this.set('partnerOn', el.partner, 'className', 'stat');
     }
     this.set('obj', el.objective, 'textContent', game.objectiveText());
     const boss = game.boss;

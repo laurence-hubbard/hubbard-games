@@ -136,7 +136,7 @@ async function joinTwoPlayer() {
     if (app.state === 'match' && game.role === 'guest') game.applySnapshot(m);
   });
   net.on('input', (m) => {
-    if (app.state === 'match' && game.role === 'host') game.remoteInputs[2] = m;
+    if (app.state === 'match' && game.role === 'host') game.setRemoteInput(2, m);
   });
   net.on('close', () => {
     if (app.net !== net) return;

@@ -131,6 +131,17 @@ class WS:
         except socket.timeout:
             return False
 
+    def answer_pings(self, seconds):
+        """Behave like a live browser: reply to server pings for `seconds`."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            try:
+                op, payload = self.recv_frame(max(0.01, deadline - time.time()))
+            except socket.timeout:
+                return
+            if op == 9:
+                self.send_frame(10, payload)
+
     def close(self):
         try:
             self.send_frame(8, b"")
@@ -161,7 +172,8 @@ class ServerTest(unittest.TestCase):
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.thread.start()
-        servers = asyncio.run_coroutine_threadsafe(server.serve(ROOT, ["127.0.0.1"], 0), self.loop).result(5)
+        servers = asyncio.run_coroutine_threadsafe(
+            server.serve(ROOT, ["127.0.0.1"], 0, ping_interval=0.2, idle_timeout=0.8), self.loop).result(5)
         self.servers = servers
         self.port = servers[0].sockets[0].getsockname()[1]
         self.clients = []
@@ -315,6 +327,23 @@ class ServerTest(unittest.TestCase):
                 p1.close()
                 p3.close()
                 time.sleep(0.15)
+
+    def test_silent_clients_are_dropped(self):
+        # Two laptops whose sockets died without a close (lid shut, wifi gone): they never answer pings.
+        self.two_players()
+        time.sleep(1.5)
+        p3 = self.join()
+        self.assertIn(p3.recv_until("welcome")["slot"], (1, 2), "dead connections should free their slots")
+
+    def test_live_clients_are_kept(self):
+        p1, p2 = self.two_players()
+        # Both answer pings (as browsers do automatically) well past the idle timeout.
+        t = threading.Thread(target=p2.answer_pings, args=(1.5,))
+        t.start()
+        p1.answer_pings(1.5)
+        t.join()
+        p3 = self.join()
+        self.assertEqual(p3.recv()["t"], "full")
 
     def test_ping_gets_pong(self):
         p1 = self.join()
