@@ -25,7 +25,8 @@ for n in "${names[@]}"; do
   out=$(timeout 300 "$CH" --no-sandbox --use-angle=swiftshader --enable-unsafe-swiftshader \
       --window-size=1280,800 --virtual-time-budget="${BUDGET:-120000}" --enable-logging=stderr --v=0 \
       --dump-dom "http://127.0.0.1:$PORT/tests/$n.test.html" 2>&1 >/dev/null \
-    | grep -oE '"TEST [^"]*"|Uncaught [^"]*' | sed 's/^"TEST //; s/"$//')
+    | grep -E 'CONSOLE.*\] "(TEST |Uncaught )' \
+    | sed -E 's/^.*CONSOLE[^]]*\] "//; s/", source: [^,]*$//; s/^TEST //')
   echo "$out"
   if echo "$out" | grep -qE '^FAIL|^Uncaught'; then status=1; fi
   if ! echo "$out" | grep -q '^DONE'; then echo "(test page never reported DONE)"; status=1; fi

@@ -7,6 +7,7 @@ export class HUD {
       hud: $('hud'), hp: $('hp-fill'), mode: $('mode'), missiles: $('missiles'), score: $('score'),
       objective: $('objective'), bossBar: $('boss-bar'), bossFill: $('boss-fill'), banner: $('banner'),
       toast: $('toast'), vignette: $('vignette'), crosshair: $('crosshair'), minimap: $('minimap'),
+      stall: $('stall'), menu: $('menu'), lobby: $('lobby'),
       screen: $('screen'), title: $('screen-title'), sub: $('screen-sub'), controls: $('controls'), cta: $('screen-cta'),
     };
     this.cache = {};
@@ -80,6 +81,9 @@ export class HUD {
     this.el.sub.innerHTML = sub;
     this.el.cta.textContent = cta;
     this.el.controls.classList.toggle('hidden', !showControls);
+    this.el.cta.classList.remove('hidden');
+    this.el.menu.classList.add('hidden');
+    this.el.lobby.classList.add('hidden');
     this.el.screen.classList.remove('hidden');
   }
 
@@ -126,6 +130,9 @@ export class HUD {
     el.vignette.style.opacity = Math.max(this.hurtV, lowPulse).toFixed(2);
     if (this.bannerT > 0) { this.bannerT -= dt; if (this.bannerT <= 0) el.banner.style.opacity = 0; }
     if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) el.toast.style.opacity = 0; }
+    const stalled = game.role === 'guest' && game.state === 'playing' && game.lastSnapAt &&
+      performance.now() - game.lastSnapAt > 2000;
+    this.set('stall', el.stall, 'className', stalled ? '' : 'hidden');
     this.drawMinimap();
   }
 }

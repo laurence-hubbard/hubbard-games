@@ -47,7 +47,7 @@ export function readLocalInput(game) {
  * opts: { renderer, def, input, audio, mode='solo', role='solo'|'host'|'guest', localSlot=1 }
  */
 export function createGame(opts) {
-  const { renderer, def, input, audio } = opts;
+  const { renderer, def, input, audio, net } = opts;
   const mode = MODES[opts.mode || 'solo'];
   const role = opts.role || 'solo';
   const localSlot = opts.localSlot || 1;
@@ -86,6 +86,8 @@ export function createGame(opts) {
     players: [],
     player: null,
     remoteInputs: {},
+    net: net || null,
+    snapT: 0,
     localTseq: 0,
 
     nextId() { return ++idCounter; },
@@ -213,7 +215,10 @@ export function createGame(opts) {
         // The host simulates; we only send input and animate what it reports.
         this.time += dt;
         this.updateAim();
-        if (this.state === 'playing') this.lastInput = readLocalInput(this);
+        if (this.state === 'playing') {
+          this.lastInput = readLocalInput(this);
+          this.net?.send({ t: 'input', ...this.lastInput });
+        }
         for (const p of this.players) p.netAnimate(dt);
         this.enemies.netAnimate(dt);
         this.projectiles.netAnimate(dt);
@@ -237,6 +242,13 @@ export function createGame(opts) {
           const t = this.timers[i];
           t.t -= dt;
           if (t.t <= 0) { this.timers.splice(i, 1); t.fn(); }
+        }
+        if (this.net && this.role === 'host') {
+          this.snapT -= dt;
+          if (this.snapT <= 0) {
+            this.snapT += 1 / 30;
+            this.net.send(buildSnapshot(this));
+          }
         }
       }
       this.updateCamera(dt);
