@@ -21,7 +21,8 @@ export class Pickups {
     }
     g.position.set(pos.x, 1.3, pos.z);
     this.game.scene.add(g);
-    this.list.push({ id: this.game.nextId(), type, g, life: 25 });
+    const life = this.game.mode.pickupRespawnEvery ? Infinity : 25; // versus pickups stay until taken
+    this.list.push({ id: this.game.nextId(), type, g, life });
   }
 
   update(dt) {

@@ -86,7 +86,17 @@ export class Projectiles {
           else g.effects.sparks(pos, COLORS[p.type], 4);
         } else if (p.owner === 'player') {
           const e = g.enemies.hitTest(pos, p.radius);
-          if (e) {
+          const rival = !e && g.mode.friendlyFire && g.players.find((pl) => pl.slot !== p.ownerSlot && !pl.dead &&
+            Math.hypot(pos.x - pl.pos.x, pos.z - pl.pos.z) < pl.radius + p.radius);
+          if (rival) {
+            dead = true;
+            if (p.splash) this.explode(p, pos.clone());
+            else {
+              rival.damage(p.dmg, p.ownerSlot);
+              g.effects.sparks(pos, COLORS.bullet, 5);
+              g.audio.play('hit');
+            }
+          } else if (e) {
             dead = true;
             if (p.splash) this.explode(p, pos.clone());
             else {

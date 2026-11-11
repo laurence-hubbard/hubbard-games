@@ -48,10 +48,75 @@ export function populate(game) {
 
 /** A player's mech was destroyed. killerSlot is set when another player did it. */
 export function onPlayerDown(game, player, killerSlot) {
-  if (game.mode.name === 'solo') {
+  const { mode } = game;
+  if (mode.name === 'solo') {
     game.after(1.8, () => game.endMatch('lost'));
+    return;
   }
+  if (mode.name === 'coop' && game.players.every((p) => p.dead)) {
+    game.matchDecided = true; // squad wiped: no more respawns
+    game.after(1.8, () => game.endMatch('lost'));
+    return;
+  }
+  if (mode.name === 'versus' && killerSlot && killerSlot !== player.slot) {
+    const killer = game.players[killerSlot - 1];
+    killer.kills++;
+    if (killer.kills >= mode.killTarget) {
+      game.matchDecided = true;
+      game.after(1.5, () => game.endMatch('won', killerSlot));
+      return;
+    }
+  }
+  player.respawnT = mode.respawnDelay;
 }
 
-/** Per-frame rule checks (respawns, win conditions). */
-export function updateMode(game, dt) {}
+/** Where a downed player comes back: beside their partner (co-op) or far from the rival (versus). */
+function respawnPoint(game, player) {
+  const others = game.players.filter((p) => p !== player && !p.dead);
+  if (game.mode.respawnNearPartner && others.length) {
+    const partner = others[0];
+    for (const [ox, oz] of [[4, 0], [-4, 0], [0, 4], [0, -4], [3, 3], [-3, -3]]) {
+      const p = partner.pos.clone().add(new THREE.Vector3(ox, 0, oz));
+      if (!game.level.blockedAt(p.x, p.z, 1)) return p;
+    }
+    return partner.pos.clone();
+  }
+  if (!others.length) return game.spawnPoints[0].clone();
+  return game.spawnPoints
+    .reduce((best, s) => (Math.min(...others.map((o) => s.distanceTo(o.pos))) >
+      Math.min(...others.map((o) => best.distanceTo(o.pos))) ? s : best))
+    .clone();
+}
+
+function respawn(game, player) {
+  const p = respawnPoint(game, player);
+  player.pos.set(p.x, 0, p.z);
+  game.level.resolveCircle(player.pos, player.radius);
+  player.vel.set(0, 0, 0);
+  player.hp = player.maxHp;
+  player.missiles = Math.max(player.missiles, 12);
+  player.dead = false;
+  player.root.visible = true;
+  game.effects.sparks(player.pos.clone().setY(2), 0x5ff3ff, 20);
+}
+
+/** Per-frame rule checks (respawns, pickup drops). */
+export function updateMode(game, dt) {
+  const { mode } = game;
+  if (mode.respawnDelay && !game.matchDecided) {
+    for (const p of game.players) {
+      if (!p.dead || p.respawnT <= 0) continue;
+      p.respawnT -= dt;
+      if (p.respawnT <= 0) respawn(game, p);
+    }
+  }
+  if (mode.pickupRespawnEvery) {
+    game.pickupT = (game.pickupT ?? mode.pickupRespawnEvery) - dt;
+    if (game.pickupT <= 0) {
+      game.pickupT = mode.pickupRespawnEvery;
+      if (game.pickups.list.length < 6) {
+        game.pickups.spawn(Math.random() < 0.5 ? 'health' : 'ammo', game.level.randomRoadPoint(null));
+      }
+    }
+  }
+}

@@ -39,6 +39,12 @@ export class HUD {
     this.mmScale = s;
   }
 
+  /** Players drawn on the minimap: everyone, or just yourself in versus. */
+  minimapPlayers() {
+    const { game } = this;
+    return game.mode.minimapShowsOthers ? game.players : [game.player];
+  }
+
   drawMinimap() {
     const { game } = this, g = this.mm, s = this.mmScale, h = game.level.half;
     const X = (x) => (x + h) * s, Z = (z) => (z + h) * s;
@@ -58,12 +64,12 @@ export class HUD {
     }
     g.fillStyle = '#4dff7a';
     for (const p of game.pickups.list) g.fillRect(X(p.g.position.x) - 1.5, Z(p.g.position.z) - 1.5, 3, 3);
-    const p = game.player;
-    if (!p.dead) {
+    for (const p of this.minimapPlayers()) {
+      if (p.dead) continue;
       g.save();
       g.translate(X(p.pos.x), Z(p.pos.z));
       g.rotate(-p.aimYaw + Math.PI);
-      g.fillStyle = '#8ff7ff';
+      g.fillStyle = p === game.player ? '#8ff7ff' : '#ffa45a';
       g.beginPath(); g.moveTo(0, -6); g.lineTo(4, 4); g.lineTo(-4, 4); g.closePath(); g.fill();
       g.restore();
     }

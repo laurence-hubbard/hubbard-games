@@ -10,6 +10,21 @@ import { MODES, populate, onPlayerDown, updateMode } from './modes.js';
 
 const IDLE_INPUT = Object.freeze({ mx: 0, mz: 0, ax: 0, az: -1, fire: false, missile: false, tseq: 0 });
 const CAM_OFFSET = new THREE.Vector3(0, 36, 25);
+const PLAYER_ACCENTS = [0x1f5fd1, 0xd1661f]; // P1 blue, P2 orange
+
+/** Starting positions: side by side in the start plaza, or opposite corners in versus. */
+function spawnPositions(game, count) {
+  const start = game.level.blockCenter(...game.def.start);
+  if (game.mode.name !== 'versus') {
+    return Array.from({ length: count }, (_, i) => new THREE.Vector3(start.x + i * 5, 0, start.z + 4));
+  }
+  const h = game.level.half;
+  const pts = game.spawnPoints;
+  const corner = new THREE.Vector3(-h, 0, h);
+  const first = pts.reduce((a, b) => (a.distanceTo(corner) < b.distanceTo(corner) ? a : b));
+  const second = pts.reduce((a, b) => (a.distanceTo(first) > b.distanceTo(first) ? a : b));
+  return [first.clone(), second.clone()].slice(0, count);
+}
 
 /** InputState for the local player, read from the keyboard/mouse and the aim raycast. */
 export function readLocalInput(game) {
@@ -90,10 +105,11 @@ export function createGame(opts) {
     damageArea(pos, radius, dmg, owner, ownerSlot) {
       if (owner === 'player') {
         this.enemies.damageArea(pos, radius, dmg, ownerSlot);
-        return;
+        if (!this.mode.friendlyFire) return;
       }
       for (const p of this.players) {
-        if (!p.dead && Math.hypot(pos.x - p.pos.x, pos.z - p.pos.z) < radius + p.radius) p.damage(dmg);
+        if (p.dead || (owner === 'player' && p.slot === ownerSlot)) continue;
+        if (Math.hypot(pos.x - p.pos.x, pos.z - p.pos.z) < radius + p.radius) p.damage(dmg, ownerSlot);
       }
     },
 
@@ -231,9 +247,9 @@ export function createGame(opts) {
   game.projectiles = new Projectiles(game);
   game.enemies = new Enemies(game);
   game.pickups = new Pickups(game);
-  const start = game.level.blockCenter(...def.start);
-  for (let slot = 1; slot <= playerCount; slot++) {
-    game.players.push(new Player(game, start.x + (slot - 1) * 5, start.z + 4, { slot }));
+  game.spawnPoints = game.level.intersections();
+  for (const [slot, pos] of spawnPositions(game, playerCount).entries()) {
+    game.players.push(new Player(game, pos.x, pos.z, { slot: slot + 1, accent: PLAYER_ACCENTS[slot] }));
   }
   game.player = game.players[localSlot - 1];
   game.hud = new HUD(game);

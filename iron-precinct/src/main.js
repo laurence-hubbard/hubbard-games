@@ -19,7 +19,9 @@ const audio = new Sfx();
 const levelIndex = Math.min(Number(params.get('level') || 0), LEVELS.length - 1);
 const def = LEVELS[levelIndex];
 
-let game = createGame({ renderer, def, input, audio, mode: 'solo', role: 'solo' });
+// Dev: ?mode=coop|versus runs a two-player game on one page (player 2 idle / test-driven).
+const devMode = ['coop', 'versus'].includes(params.get('mode')) ? params.get('mode') : 'solo';
+let game = createGame({ renderer, def, input, audio, mode: devMode, role: devMode === 'solo' ? 'solo' : 'host' });
 window.game = game; // handy for debugging in the console
 
 addEventListener('resize', () => {
