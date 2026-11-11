@@ -175,7 +175,21 @@ export function createGame(opts) {
       if (this.state !== 'playing') return;
       this.state = state;
       this.winnerSlot = winnerSlot;
-      if (state === 'won') {
+      const me = this.player;
+      const other = this.players.find((p) => p !== me);
+      const lobbyCta = 'PRESS R OR CLICK TO RETURN TO LOBBY';
+      if (this.mode.name === 'versus') {
+        const won = winnerSlot === me.slot;
+        this.hud.showScreen(won ? 'YOU WIN' : 'YOU LOSE',
+          `Final kills — you <b>${me.kills}</b> · rival <b>${other.kills}</b>`, lobbyCta);
+      } else if (this.mode.name === 'coop') {
+        const kills = this.players.map((p) => `Player ${p.slot}${p === me ? ' (you)' : ''}: <b>${p.kills}</b> kills`).join(' · ');
+        if (state === 'won') {
+          this.hud.showScreen('DISTRICT SECURED', `${this.def.name}<br/>Squad score: <b>${this.score}</b><br/>${kills}`, lobbyCta);
+        } else {
+          this.hud.showScreen('SQUAD DESTROYED', `Squad score: <b>${this.score}</b><br/>${kills}`, lobbyCta);
+        }
+      } else if (state === 'won') {
         this.hud.showScreen('DISTRICT SECURED', `${this.def.name}<br/>Final score: <b>${this.score}</b>`, 'PRESS R OR CLICK TO PLAY AGAIN');
       } else {
         this.hud.showScreen('UNIT DESTROYED', `Score: <b>${this.score}</b>`, 'PRESS R OR CLICK TO REDEPLOY');

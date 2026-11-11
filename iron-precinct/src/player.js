@@ -226,7 +226,7 @@ export class Player {
     const r2 = (v) => Math.round(v * 100) / 100;
     return {
       s: this.slot, x: r2(this.pos.x), z: r2(this.pos.z), vx: r2(this.vel.x), vz: r2(this.vel.z),
-      ay: r2(this.aimYaw), m: this.nextMode || this.mode, hp: Math.ceil(this.hp), mi: this.missiles,
+      ay: r2(this.aimYaw), m: this.nextMode || this.mode, hp: Math.ceil(this.hp), mh: this.maxHp, mi: this.missiles,
       d: this.dead ? 1 : 0, k: this.kills,
     };
   }
@@ -244,6 +244,7 @@ export class Player {
       this.transformT = TRANSFORM_TIME;
     }
     this.hp = s.hp;
+    this.maxHp = s.mh ?? this.maxHp;
     this.missiles = s.mi;
     this.kills = s.k;
     const wasDead = this.dead;

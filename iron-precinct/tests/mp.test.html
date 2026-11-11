@@ -88,6 +88,12 @@ run(async () => {
   G(B).input.mouse.left = false;
   check('guest_bullets_damage_enemy', jam.hp < 240, `jammer hp ${jam.hp}`);
 
+  // Guest's HUD shows the host's hull as a percentage.
+  G(A).players[0].hp = G(A).players[0].maxHp / 2;
+  await pump(A, B, 0.3);
+  check('hud_partner_hp', /PARTNER\s+50%/.test(text(B, 'partner')) && /PARTNER\s+100%/.test(text(A, 'partner')),
+    `guest sees "${text(B, 'partner')}", host sees "${text(A, 'partner')}"`);
+
   // No pausing a shared game.
   for (const f of [A, B]) f.contentWindow.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP' }));
   await pump(A, B, 0.2);
@@ -120,6 +126,22 @@ run(async () => {
   check('versus_round_trip', app(A).state === 'match' && G(A).mode.name === 'versus' && G(B).mode.name === 'versus' &&
     G(A).players[0].kills === 1 && G(B).players[0].kills === 1,
     `A ${G(A).mode.name} kills ${G(A).players[0].kills} | B ${G(B).mode.name} sees ${G(B).players[0].kills}`);
+
+  check('hud_versus_scoreboard', text(A, 'score') === 'YOU 1 — 0 RIVAL' && text(B, 'score') === 'YOU 0 — 1 RIVAL',
+    `host "${text(A, 'score')}" guest "${text(B, 'score')}"`);
+
+  // Player 1 reaches 10 kills.
+  for (let i = 0; i < 400 && G(A).players[1].dead; i++) await pump(A, B, 1 / 60); // wait out the 3 s respawn
+  G(A).players[0].kills = 9;
+  G(A).players[1].damage(99999, 1);
+  await pump(A, B, 2);
+  check('end_screens_perspective', text(A, 'screen-title') === 'YOU WIN' && text(B, 'screen-title') === 'YOU LOSE' &&
+    /RETURN TO LOBBY/.test(text(B, 'screen-cta')),
+    `host "${text(A, 'screen-title')}" guest "${text(B, 'screen-title')}" cta "${text(B, 'screen-cta')}"`);
+
+  click(B, 'screen');
+  await until(() => app(A).state === 'lobby' && app(B).state === 'lobby');
+  check('end_returns_to_lobby', app(A).state === 'lobby' && app(B).state === 'lobby', `A ${app(A).state} B ${app(B).state}`);
 
   // --- disconnects -----------------------------------------------------------
   B.remove();

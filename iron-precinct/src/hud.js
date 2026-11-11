@@ -7,7 +7,7 @@ export class HUD {
       hud: $('hud'), hp: $('hp-fill'), mode: $('mode'), missiles: $('missiles'), score: $('score'),
       objective: $('objective'), bossBar: $('boss-bar'), bossFill: $('boss-fill'), banner: $('banner'),
       toast: $('toast'), vignette: $('vignette'), crosshair: $('crosshair'), minimap: $('minimap'),
-      stall: $('stall'), menu: $('menu'), lobby: $('lobby'),
+      stall: $('stall'), partner: $('partner'), scoreLabel: $('score-label'), menu: $('menu'), lobby: $('lobby'),
       screen: $('screen'), title: $('screen-title'), sub: $('screen-sub'), controls: $('controls'), cta: $('screen-cta'),
     };
     this.cache = {};
@@ -115,7 +115,18 @@ export class HUD {
     this.set('hpLow', el.hp, 'className', hpPct < 30 ? 'low' : '');
     this.set('mode', el.mode, 'textContent', 'MODE: ' + p.stats.label);
     this.set('mis', el.missiles, 'textContent', 'MISSILES: ' + p.missiles);
-    this.set('score', el.score, 'textContent', String(game.score));
+    const rival = game.players.find((q) => q !== p);
+    if (game.mode.name === 'versus' && rival) {
+      this.set('scoreLabel', el.scoreLabel, 'textContent', 'KILLS');
+      this.set('score', el.score, 'textContent', `YOU ${p.kills} — ${rival.kills} RIVAL`);
+    } else {
+      this.set('score', el.score, 'textContent', String(game.score));
+    }
+    if (game.mode.name === 'coop' && rival) {
+      const txt = rival.dead ? 'PARTNER  DOWN — respawning' : `PARTNER  ${Math.round((rival.hp / rival.maxHp) * 100)}%`;
+      this.set('partner', el.partner, 'textContent', txt);
+      this.set('partnerOn', el.partner, 'className', 'stat');
+    }
     this.set('obj', el.objective, 'textContent', game.objectiveText());
     const boss = game.boss;
     const showBoss = !!(boss && boss.alive);
