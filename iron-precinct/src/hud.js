@@ -7,6 +7,7 @@ export class HUD {
       hud: $('hud'), hp: $('hp-fill'), mode: $('mode'), missiles: $('missiles'), score: $('score'),
       objective: $('objective'), bossBar: $('boss-bar'), bossFill: $('boss-fill'), banner: $('banner'),
       toast: $('toast'), vignette: $('vignette'), crosshair: $('crosshair'), minimap: $('minimap'),
+      stall: $('stall'), partner: $('partner'), scoreLabel: $('score-label'), menu: $('menu'), lobby: $('lobby'),
       screen: $('screen'), title: $('screen-title'), sub: $('screen-sub'), controls: $('controls'), cta: $('screen-cta'),
     };
     this.cache = {};
@@ -39,6 +40,12 @@ export class HUD {
     this.mmScale = s;
   }
 
+  /** Players drawn on the minimap: everyone, or just yourself in versus. */
+  minimapPlayers() {
+    const { game } = this;
+    return game.mode.minimapShowsOthers ? game.players : [game.player];
+  }
+
   drawMinimap() {
     const { game } = this, g = this.mm, s = this.mmScale, h = game.level.half;
     const X = (x) => (x + h) * s, Z = (z) => (z + h) * s;
@@ -58,12 +65,12 @@ export class HUD {
     }
     g.fillStyle = '#4dff7a';
     for (const p of game.pickups.list) g.fillRect(X(p.g.position.x) - 1.5, Z(p.g.position.z) - 1.5, 3, 3);
-    const p = game.player;
-    if (!p.dead) {
+    for (const p of this.minimapPlayers()) {
+      if (p.dead) continue;
       g.save();
       g.translate(X(p.pos.x), Z(p.pos.z));
       g.rotate(-p.aimYaw + Math.PI);
-      g.fillStyle = '#8ff7ff';
+      g.fillStyle = p === game.player ? '#8ff7ff' : '#ffa45a';
       g.beginPath(); g.moveTo(0, -6); g.lineTo(4, 4); g.lineTo(-4, 4); g.closePath(); g.fill();
       g.restore();
     }
@@ -74,6 +81,9 @@ export class HUD {
     this.el.sub.innerHTML = sub;
     this.el.cta.textContent = cta;
     this.el.controls.classList.toggle('hidden', !showControls);
+    this.el.cta.classList.remove('hidden');
+    this.el.menu.classList.add('hidden');
+    this.el.lobby.classList.add('hidden');
     this.el.screen.classList.remove('hidden');
   }
 
@@ -105,7 +115,17 @@ export class HUD {
     this.set('hpLow', el.hp, 'className', hpPct < 30 ? 'low' : '');
     this.set('mode', el.mode, 'textContent', 'MODE: ' + p.stats.label);
     this.set('mis', el.missiles, 'textContent', 'MISSILES: ' + p.missiles);
-    this.set('score', el.score, 'textContent', String(game.score));
+    const rival = game.players.find((q) => q !== p);
+    // The HUD elements outlive a match, so always set mode-specific lines (never leave last match's).
+    const versus = game.mode.name === 'versus' && rival;
+    const coop = game.mode.name === 'coop' && rival;
+    this.set('scoreLabel', el.scoreLabel, 'textContent', versus ? 'KILLS' : 'SCORE');
+    this.set('score', el.score, 'textContent', versus ? `YOU ${p.kills} — ${rival.kills} RIVAL` : String(game.score));
+    this.set('partnerOn', el.partner, 'className', coop ? 'stat' : 'stat hidden');
+    if (coop) {
+      const txt = rival.dead ? 'PARTNER  DOWN — respawning' : `PARTNER  ${Math.round((rival.hp / rival.maxHp) * 100)}%`;
+      this.set('partner', el.partner, 'textContent', txt);
+    }
     this.set('obj', el.objective, 'textContent', game.objectiveText());
     const boss = game.boss;
     const showBoss = !!(boss && boss.alive);
@@ -120,6 +140,9 @@ export class HUD {
     el.vignette.style.opacity = Math.max(this.hurtV, lowPulse).toFixed(2);
     if (this.bannerT > 0) { this.bannerT -= dt; if (this.bannerT <= 0) el.banner.style.opacity = 0; }
     if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) el.toast.style.opacity = 0; }
+    const stalled = game.role === 'guest' && game.state === 'playing' && game.lastSnapAt &&
+      performance.now() - game.lastSnapAt > 2000;
+    this.set('stall', el.stall, 'className', stalled ? '' : 'hidden');
     this.drawMinimap();
   }
 }

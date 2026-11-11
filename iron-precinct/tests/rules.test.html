@@ -1,0 +1,127 @@
+<!doctype html>
+<html><body style="margin:0">
+<script type="module">
+import { check, openGame, sim, run } from './harness.js';
+
+const IDLE = { mx: 0, mz: 0, ax: 0, az: 0, fire: false, missile: false, tseq: 0 };
+const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+
+/** Point the local (P1) mouse at a world position. */
+function aimAt(g, pos) {
+  const v = pos.clone().setY(3).project(g.camera);
+  g.input.ndc.x = v.x;
+  g.input.ndc.y = v.y;
+}
+
+/** Stop AI enemies waking up on their own so rule tests aren't disturbed. */
+function freezeEnemies(g) {
+  for (const e of g.enemies.list) { e.dormant = true; e.wakeRange = 0; }
+}
+
+run(async () => {
+  // ---------------------------------------------------------------- CO-OP
+  const cf = await openGame('autostart&mode=coop', { width: 640, height: 400 });
+  const g = cf.contentWindow.game;
+  const [p1, p2] = g.players || [];
+  check('coop_two_players', g.players?.length === 2 && p2 && p1.accent !== p2.accent,
+    `players=${g.players?.length} accents=${p1?.accent},${p2?.accent}`);
+
+  const count = (t) => g.enemies.list.filter((e) => e.type === t).length;
+  const d = g.def;
+  check('coop_scaled_counts',
+    count('drone') === Math.round(d.drones * 1.5) && count('rammer') === Math.round(d.rammers * 1.5) &&
+    count('turret') === Math.round(d.turrets * 1.5) + d.jammers.length * 2,
+    `drones=${count('drone')} rammers=${count('rammer')} turrets=${count('turret')}`);
+
+  // Targeting: a drone 10 from P2 and ~60 from P1 should chase P2.
+  const drone = g.enemies.list.find((e) => e.type === 'drone');
+  const toCenter = Math.sign(-drone.pos.x) || 1;
+  p2.pos.set(drone.pos.x + 10 * toCenter, 0, drone.pos.z);
+  p1.pos.set(drone.pos.x + 60 * toCenter, 0, drone.pos.z);
+  drone.dormant = false;
+  g.step(1 / 60);
+  check('coop_enemies_target_nearer', drone.target === p2,
+    `target slot=${drone.target?.slot} d1=${dist(drone.pos, p1.pos).toFixed(0)} d2=${dist(drone.pos, p2.pos).toFixed(0)}`);
+
+  // Friendly fire: back in the start plaza, P1 shoots at P2.
+  freezeEnemies(g);
+  const start = g.level.blockCenter(...d.start);
+  p1.pos.set(start.x, 0, start.z + 6);
+  p2.pos.set(start.x, 0, start.z - 4);
+  sim(g, 1.5);
+  const hpBefore = p2.hp;
+  g.input.mouse.left = true;
+  sim(g, 2, () => aimAt(g, p2.pos));
+  g.input.mouse.left = false;
+  check('coop_no_friendly_fire', p2.hp === hpBefore, `p2 hp ${hpBefore} -> ${p2.hp}`);
+
+  // Respawn beside partner.
+  p2.damage(99999);
+  const downNow = p2.dead;
+  sim(g, 5.1);
+  check('coop_respawn_near_partner', downNow && !p2.dead && p2.hp === p2.maxHp && dist(p2.pos, p1.pos) < 8,
+    `wasDown=${downNow} dead=${p2.dead} hp=${p2.hp} dist=${dist(p2.pos, p1.pos).toFixed(1)}`);
+
+  // Kill credit: a drone parked in front of P2, P2 fires at it.
+  const target = g.enemies.list.find((e) => e.type === 'drone' && e.alive);
+  target.pos.set(p2.pos.x, 0, p2.pos.z - 8);
+  g.remoteInputs[2] = { ...IDLE, ax: target.pos.x, az: target.pos.z, fire: true };
+  sim(g, 3, () => { if (target.alive) target.pos.set(p2.pos.x, 0, p2.pos.z - 8); });
+  g.remoteInputs[2] = { ...IDLE, ax: p2.pos.x, az: p2.pos.z - 10 };
+  check('coop_kill_credit', !target.alive && p2.kills === 1, `alive=${target.alive} p2.kills=${p2.kills} p1.kills=${p1.kills}`);
+
+  // Boss HP scaled for two.
+  for (const e of g.enemies.list.filter((e) => e.type === 'jammer')) e.damage(99999);
+  sim(g, 3.5);
+  check('coop_boss_hp_scaled', g.boss && g.boss.maxHp === 2250, `boss maxHp ${g.boss?.maxHp}`);
+
+  // One down is fine; both down loses.
+  p1.hp = p1.maxHp; p2.hp = p2.maxHp;
+  p1.damage(99999);
+  sim(g, 0.5);
+  const stillPlaying = g.state === 'playing';
+  p2.damage(99999);
+  sim(g, 2.5);
+  check('coop_both_down_loses', stillPlaying && g.state === 'lost', `afterOne=${stillPlaying} final=${g.state}`);
+
+  // --------------------------------------------------------------- VERSUS
+  const vf = await openGame('autostart&mode=versus', { width: 640, height: 400 });
+  const v = vf.contentWindow.game;
+  const [v1, v2] = v.players;
+  const aiTypes = ['drone', 'turret', 'rammer', 'jammer', 'boss'];
+  check('versus_no_ai', !v.enemies.list.some((e) => aiTypes.includes(e.type)) && v.enemies.list.some((e) => e.type === 'crate'),
+    `types=${[...new Set(v.enemies.list.map((e) => e.type))]}`);
+  check('versus_spawns_apart', dist(v1.pos, v2.pos) >= 60, `spawn distance ${dist(v1.pos, v2.pos).toFixed(0)}`);
+
+  check('versus_minimap_hides_opponent', v.mode.minimapShowsOthers === false &&
+    v.hud.minimapPlayers().length === 1 && v.hud.minimapPlayers()[0] === v.player);
+
+  // P1 shoots P2 down (P2 parked 10 north on the same road).
+  v2.pos.set(v1.pos.x, 0, v1.pos.z - 10);
+  sim(v, 1.5);
+  v.input.mouse.left = true;
+  for (let i = 0; i < 600 && !v2.dead; i++) { aimAt(v, v2.pos); v.step(1 / 60); }
+  v.input.mouse.left = false;
+  check('versus_damage_and_kill', v2.dead && v1.kills === 1, `p2 dead=${v2.dead} hp=${v2.hp} p1.kills=${v1.kills}`);
+
+  sim(v, 3.1);
+  const far = v.spawnPoints.reduce((best, s) => (dist(s, v1.pos) > dist(best, v1.pos) ? s : best));
+  check('versus_respawn_far', !v2.dead && dist(v2.pos, far) < 2 && dist(v2.pos, v1.pos) >= 60,
+    `dead=${v2.dead} fromFarthest=${dist(v2.pos, far).toFixed(1)} fromP1=${dist(v2.pos, v1.pos).toFixed(0)}`);
+
+  v1.kills = 9;
+  v2.damage(99999, 1);
+  sim(v, 2);
+  check('versus_ten_kills_wins', v.state === 'won' && v.winnerSlot === 1, `state=${v.state} winner=${v.winnerSlot}`);
+
+  // Pickups appear over time (players topped up so nothing gets collected).
+  const pf = await openGame('autostart&mode=versus', { width: 320, height: 200 });
+  const pg = pf.contentWindow.game;
+  for (const p of pg.players) p.missiles = 20;
+  const initial = pg.pickups.list.length;
+  sim(pg, 30);
+  const n = pg.pickups.list.length;
+  check('versus_pickups_respawn', n > initial && n <= 6, `pickups ${initial} -> ${n}`);
+});
+</script>
+</body></html>

@@ -1,0 +1,182 @@
+<!doctype html>
+<html><body style="margin:0">
+<script type="module">
+import { check, openGame, run, wait } from './harness.js';
+
+const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+const doc = (f) => f.contentDocument;
+const text = (f, id) => doc(f).getElementById(id)?.textContent || '';
+const click = (f, id) => doc(f).getElementById(id).click();
+const G = (f) => f.contentWindow.game;
+const app = (f) => f.contentWindow.app;
+
+// Under headless "virtual time", setTimeout waits are fast-forwarded while network
+// messages arrive in real time. These helpers yield to the browser via MessageChannel,
+// which lets socket messages through without consuming virtual time.
+const ch = new MessageChannel();
+let yieldResolve;
+ch.port1.onmessage = () => yieldResolve();
+const yieldOnce = () => new Promise((r) => { yieldResolve = r; ch.port2.postMessage(0); });
+
+/** Yield until cond() is true (gives the network up to ~a few real seconds). */
+async function until(cond, maxYields = 400000) {
+  for (let i = 0; i < maxYields && !cond(); i++) await yieldOnce();
+  return cond();
+}
+
+/** Let in-flight network messages land. */
+async function settle(n = 3000) { for (let i = 0; i < n; i++) await yieldOnce(); }
+
+/** Step both games together; let the network deliver between frames. */
+async function pump(host, guest, sec, each) {
+  for (let i = 0; i < Math.round(sec * 60); i++) {
+    guest && G(guest).step(1 / 60);
+    host && G(host).step(1 / 60);
+    each?.();
+    await settle(200);
+  }
+}
+
+function aimAt(g, pos) {
+  const v = pos.clone().setY(3).project(g.camera);
+  g.input.ndc.x = v.x; g.input.ndc.y = v.y;
+}
+
+run(async () => {
+  const A = await openGame('', { width: 480, height: 320 });
+  let B = await openGame('', { width: 480, height: 320 });
+
+  // --- lobby -------------------------------------------------------------
+  click(A, 'btn-2p');
+  await until(() => app(A)?.net?.slot === 1);
+  click(B, 'btn-2p');
+  await until(() => app(B)?.net?.slot === 2 && /connected/i.test(text(A, 'lobby-p2')) && /PLAYER 1 — connected/i.test(text(B, 'lobby-p1')));
+  check('lobby_slots', app(A).net.slot === 1 && app(B).net.slot === 2 &&
+    /connected/i.test(text(A, 'lobby-p2')) && /connected/i.test(text(B, 'lobby-p1')),
+    `slots ${app(A)?.net?.slot},${app(B)?.net?.slot} A.p2="${text(A, 'lobby-p2')}" B.p1="${text(B, 'lobby-p1')}"`);
+
+  const bStart = doc(B).getElementById('btn-start');
+  check('p2_cannot_start', !bStart || bStart.disabled || bStart.offsetParent === null);
+
+  // --- co-op match ---------------------------------------------------------
+  click(A, 'btn-coop');
+  click(A, 'btn-start');
+  await until(() => G(A).state === 'playing' && G(B).state === 'playing');
+  check('coop_start_both_playing', G(A).state === 'playing' && G(B).state === 'playing' &&
+    G(A).mode.name === 'coop' && G(B).mode.name === 'coop' && G(A).role === 'host' && G(B).role === 'guest' &&
+    G(A).def.seed === G(B).def.seed,
+    `A ${G(A).state}/${G(A).mode.name}/${G(A).role} B ${G(B).state}/${G(B).mode.name}/${G(B).role}`);
+
+  G(A).players[1].hp = G(A).players[1].maxHp = 100000;
+  G(A).players[0].hp = G(A).players[0].maxHp = 100000;
+  await pump(A, B, 0.5);
+  const x0 = G(A).players[1].pos.x;
+  G(B).input.keys.add('KeyD');
+  await pump(A, B, 1);
+  G(B).input.keys.delete('KeyD');
+  await pump(A, B, 0.5);
+  check('guest_moves_on_both', G(A).players[1].pos.x - x0 > 5 && dist(G(A).players[1].pos, G(B).players[1].pos) < 1,
+    `moved ${(G(A).players[1].pos.x - x0).toFixed(1)} gap ${dist(G(A).players[1].pos, G(B).players[1].pos).toFixed(2)}`);
+
+  // Guest goes silent mid-move (lid closed while holding D): the host must stop applying the stale input.
+  // Put P2 on the long open road along the south edge, heading east, so walls can't stop it.
+  G(A).players[1].pos.set(-100, 0, 119);
+  await pump(A, B, 0.3);
+  G(B).input.keys.add('KeyD');
+  await pump(A, B, 0.5);
+  const guestStep = G(B).step;
+  G(B).step = () => {};
+  await pump(A, null, 0.5);
+  const xStale = G(A).players[1].pos.x;
+  await pump(A, null, 1);
+  G(B).step = guestStep;
+  G(B).input.keys.delete('KeyD');
+  check('stale_guest_input_expires', Math.abs(G(A).players[1].pos.x - xStale) < 0.5,
+    `P2 kept moving ${(G(A).players[1].pos.x - xStale).toFixed(1)} units after the guest went silent`);
+  await pump(A, B, 0.3);
+
+  // Guest shoots a jammer.
+  const jam = G(A).enemies.list.find((e) => e.type === 'jammer');
+  G(A).players[1].pos.set(jam.pos.x, 0, jam.pos.z + 10);
+  await pump(A, B, 1.5);
+  const gJam = G(B).enemies.list.find((e) => e.id === jam.id);
+  G(B).input.mouse.left = true;
+  await pump(A, B, 2, () => aimAt(G(B), gJam.pos));
+  G(B).input.mouse.left = false;
+  check('guest_bullets_damage_enemy', jam.hp < 240, `jammer hp ${jam.hp}`);
+
+  // Guest's HUD shows the host's hull as a percentage.
+  G(A).players[0].hp = G(A).players[0].maxHp / 2;
+  await pump(A, B, 0.3);
+  check('hud_partner_hp', /PARTNER\s+50%/.test(text(B, 'partner')) && /PARTNER\s+100%/.test(text(A, 'partner')),
+    `guest sees "${text(B, 'partner')}", host sees "${text(A, 'partner')}"`);
+
+  // No pausing a shared game.
+  for (const f of [A, B]) f.contentWindow.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP' }));
+  await pump(A, B, 0.2);
+  check('no_pause_in_two_player', G(A).state === 'playing' && G(B).state === 'playing', `A ${G(A).state} B ${G(B).state}`);
+
+  // Host stalls (tab hidden) -> guest sees a waiting overlay, which clears when the host resumes.
+  // Freeze the host the way a hidden tab / closed lid does (its loop stops), let in-flight
+  // snapshots land, then let 2.5 s pass on the guest.
+  const hostStep = G(A).step;
+  G(A).step = () => {};
+  for (let quiet = 0, last = G(B).lastSnapAt; quiet < 5000; ) {
+    await yieldOnce();
+    if (G(B).lastSnapAt === last) quiet++; else { quiet = 0; last = G(B).lastSnapAt; }
+  }
+  for (let i = 0; i < 25; i++) { G(B).step(1 / 60); await wait(100); }
+  const stallShown = /WAITING FOR PLAYER 1/.test(text(B, 'stall')) && doc(B).getElementById('stall').offsetParent !== null;
+  G(A).step = hostStep;
+  await pump(A, B, 0.5);
+  const stallCleared = doc(B).getElementById('stall').offsetParent === null;
+  check('guest_stall_overlay', stallShown && stallCleared, `shown=${stallShown} cleared=${stallCleared}`);
+
+  // --- back to lobby, then versus ------------------------------------------
+  app(A).net.send({ t: 'end' });
+  await until(() => app(A).state === 'lobby' && app(B).state === 'lobby');
+  click(A, 'btn-versus');
+  click(A, 'btn-start');
+  await until(() => G(A).state === 'playing' && G(B).state === 'playing' && G(B).mode.name === 'versus');
+  G(A).players[1].damage(99999, 1);
+  await pump(A, B, 0.5);
+  check('versus_round_trip', app(A).state === 'match' && G(A).mode.name === 'versus' && G(B).mode.name === 'versus' &&
+    G(A).players[0].kills === 1 && G(B).players[0].kills === 1,
+    `A ${G(A).mode.name} kills ${G(A).players[0].kills} | B ${G(B).mode.name} sees ${G(B).players[0].kills}`);
+
+  check('hud_resets_between_matches', doc(A).getElementById('partner').offsetParent === null &&
+    doc(B).getElementById('partner').offsetParent === null && text(A, 'score-label') === 'KILLS',
+    `partner visible: host=${doc(A).getElementById('partner').offsetParent !== null} guest=${doc(B).getElementById('partner').offsetParent !== null}`);
+  check('hud_versus_scoreboard', text(A, 'score') === 'YOU 1 — 0 RIVAL' && text(B, 'score') === 'YOU 0 — 1 RIVAL',
+    `host "${text(A, 'score')}" guest "${text(B, 'score')}"`);
+
+  // Player 1 reaches 10 kills.
+  for (let i = 0; i < 400 && G(A).players[1].dead; i++) await pump(A, B, 1 / 60); // wait out the 3 s respawn
+  G(A).players[0].kills = 9;
+  G(A).players[1].damage(99999, 1);
+  await pump(A, B, 2);
+  check('end_screens_perspective', text(A, 'screen-title') === 'YOU WIN' && text(B, 'screen-title') === 'YOU LOSE' &&
+    /RETURN TO LOBBY/.test(text(B, 'screen-cta')),
+    `host "${text(A, 'screen-title')}" guest "${text(B, 'screen-title')}" cta "${text(B, 'screen-cta')}"`);
+
+  click(B, 'screen');
+  await until(() => app(A).state === 'lobby' && app(B).state === 'lobby');
+  check('end_returns_to_lobby', app(A).state === 'lobby' && app(B).state === 'lobby', `A ${app(A).state} B ${app(B).state}`);
+
+  // --- disconnects -----------------------------------------------------------
+  B.remove();
+  await until(() => /Partner disconnected/i.test(text(A, 'lobby-msg')) && app(A).state === 'lobby');
+  const backInLobby = app(A).state === 'lobby' && /Partner disconnected/i.test(text(A, 'lobby-msg'));
+  B = await openGame('', { width: 480, height: 320 });
+  click(B, 'btn-2p');
+  await until(() => app(B)?.net?.slot === 2);
+  check('disconnect_returns_lobby', backInLobby && app(B).net.slot === 2,
+    `lobby=${app(A).state} msg="${text(A, 'lobby-msg')}" newSlot=${app(B)?.net?.slot}`);
+
+  const C = await openGame('', { width: 320, height: 200 });
+  click(C, 'btn-2p');
+  await until(() => /Game full/i.test(text(C, 'title-msg')));
+  check('third_client_sees_full', /Game full/i.test(text(C, 'title-msg')), `msg="${text(C, 'title-msg')}"`);
+});
+</script>
+</body></html>

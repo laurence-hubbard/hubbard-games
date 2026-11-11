@@ -9,8 +9,14 @@ const TRANSFORM_TIME = 0.4;
 export const MAX_MISSILES = 20;
 
 export class Player {
-  constructor(game, x, z) {
+  constructor(game, x, z, { slot = 1, accent = 0x1f5fd1 } = {}) {
     this.game = game;
+    this.slot = slot;
+    this.accent = accent;
+    this.kills = 0;
+    this.respawnT = 0;
+    this.lastTseq = 0;
+    this.aim = new THREE.Vector3(x, 0, z - 10);
     this.pos = new THREE.Vector3(x, 0, z);
     this.vel = new THREE.Vector3();
     this.radius = 1.6;
@@ -44,7 +50,7 @@ export class Player {
   buildWalker() {
     const hull = new THREE.MeshStandardMaterial({ color: 0xdfe6f0, roughness: 0.45, metalness: 0.5 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x2a3140, roughness: 0.6, metalness: 0.6 });
-    const accent = new THREE.MeshStandardMaterial({ color: 0x1f5fd1, roughness: 0.4, metalness: 0.4 });
+    const accent = new THREE.MeshStandardMaterial({ color: this.accent, roughness: 0.4, metalness: 0.4 });
     const glow = new THREE.MeshBasicMaterial({ color: 0x5ff3ff });
 
     const g = (this.walker = new THREE.Group());
@@ -88,7 +94,7 @@ export class Player {
   buildHover() {
     const hull = new THREE.MeshStandardMaterial({ color: 0xdfe6f0, roughness: 0.4, metalness: 0.55 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x2a3140, roughness: 0.6, metalness: 0.6 });
-    const accent = new THREE.MeshStandardMaterial({ color: 0x1f5fd1, roughness: 0.4, metalness: 0.4 });
+    const accent = new THREE.MeshStandardMaterial({ color: this.accent, roughness: 0.4, metalness: 0.4 });
     const glass = new THREE.MeshStandardMaterial({ color: 0x0a2a3a, emissive: 0x0c6d8a, roughness: 0.2, metalness: 0.8 });
     const glow = new THREE.MeshBasicMaterial({ color: 0x5ff3ff });
 
@@ -112,39 +118,26 @@ export class Player {
 
   meshFor(mode) { return mode === 'walker' ? this.walker : this.hover; }
 
-  update(dt) {
+  /** inp: InputState { mx, mz, ax, az, fire, missile, tseq } */
+  update(dt, inp) {
     if (this.dead) return;
-    const g = this.game, inp = g.input;
+    const g = this.game;
+    this.aim.set(inp.ax, 0, inp.az);
 
     // Transform walker <-> hover.
-    if ((inp.pressed('Space') || inp.pressed('KeyQ')) && this.transformT <= 0) {
+    const wantsTransform = inp.tseq !== this.lastTseq;
+    this.lastTseq = inp.tseq;
+    if (wantsTransform && this.transformT <= 0) {
       this.nextMode = this.mode === 'walker' ? 'hover' : 'walker';
       this.transformT = TRANSFORM_TIME;
       g.audio.play('transform');
       g.effects.sparks(this.pos.clone().setY(2), 0x5ff3ff, 16);
     }
-    if (this.transformT > 0) {
-      this.transformT = Math.max(0, this.transformT - dt);
-      const t = 1 - this.transformT / TRANSFORM_TIME;
-      if (t >= 0.5 && this.nextMode) {
-        const old = this.meshFor(this.mode);
-        old.visible = false;
-        old.scale.y = 1;
-        this.mode = this.nextMode;
-        this.nextMode = null;
-        this.meshFor(this.mode).visible = true;
-      }
-      const cur = this.meshFor(this.mode);
-      cur.scale.y = this.transformT === 0 ? 1 : t < 0.5 ? 1 - t * 1.8 : 0.1 + (t - 0.5) * 1.8;
-    }
+    this.animateTransform(dt);
 
     // Movement.
     const st = this.stats;
-    let mx = 0, mz = 0;
-    if (inp.down('KeyW') || inp.down('ArrowUp')) mz -= 1;
-    if (inp.down('KeyS') || inp.down('ArrowDown')) mz += 1;
-    if (inp.down('KeyA') || inp.down('ArrowLeft')) mx -= 1;
-    if (inp.down('KeyD') || inp.down('ArrowRight')) mx += 1;
+    let mx = inp.mx || 0, mz = inp.mz || 0;
     const len = Math.hypot(mx, mz);
     if (len > 0) { mx /= len; mz /= len; }
     const speed = st.speed * (this.transformT > 0 ? 0.4 : 1);
@@ -162,8 +155,43 @@ export class Player {
     }
 
     // Aim & animation.
-    const ax = g.aimPoint.x - this.pos.x, az = g.aimPoint.z - this.pos.z;
+    const ax = this.aim.x - this.pos.x, az = this.aim.z - this.pos.z;
     this.aimYaw = angleLerp(this.aimYaw, Math.atan2(ax, az), 1 - Math.exp(-18 * dt));
+    this.animate(dt);
+
+    // Weapons.
+    this.fireCd -= dt;
+    this.missileCd -= dt;
+    if (this.transformT <= 0) {
+      if (inp.fire && this.fireCd <= 0) { this.fire(st); this.fireCd = st.fireRate; }
+      if (inp.missile && this.missileCd <= 0 && this.missiles > 0) {
+        this.fireMissile();
+        this.missileCd = 0.3;
+        this.missiles--;
+      }
+    }
+  }
+
+  /** Walker <-> hover squash-and-swap animation. */
+  animateTransform(dt) {
+    if (this.transformT <= 0) return;
+    this.transformT = Math.max(0, this.transformT - dt);
+    const t = 1 - this.transformT / TRANSFORM_TIME;
+    if (t >= 0.5 && this.nextMode) {
+      const old = this.meshFor(this.mode);
+      old.visible = false;
+      old.scale.y = 1;
+      this.mode = this.nextMode;
+      this.nextMode = null;
+      this.meshFor(this.mode).visible = true;
+    }
+    const cur = this.meshFor(this.mode);
+    cur.scale.y = this.transformT === 0 ? 1 : t < 0.5 ? 1 - t * 1.8 : 0.1 + (t - 0.5) * 1.8;
+  }
+
+  /** Visual-only animation from pos / vel / aimYaw (runs on host and guest). */
+  animate(dt) {
+    const g = this.game;
     const sp = Math.hypot(this.vel.x, this.vel.z);
     if (sp > 0.5) this.moveYaw = angleLerp(this.moveYaw, Math.atan2(this.vel.x, this.vel.z), 1 - Math.exp(-10 * dt));
 
@@ -191,22 +219,55 @@ export class Player {
     this.lightRed.color.setHex(on ? 0xff1a2e : 0x2a0508);
     this.lightBlue.color.setHex(on ? 0x08102a : 0x1a5cff);
     this.root.position.copy(this.pos);
+  }
 
-    // Weapons.
-    this.fireCd -= dt;
-    this.missileCd -= dt;
-    if (this.transformT <= 0) {
-      if (inp.mouse.left && this.fireCd <= 0) { this.fire(st); this.fireCd = st.fireRate; }
-      if (inp.mouse.right && this.missileCd <= 0 && this.missiles > 0) {
-        this.fireMissile();
-        this.missileCd = 0.3;
-        this.missiles--;
-      }
+  // --- network sync (host -> guest) ---
+  netState() {
+    const r2 = (v) => Math.round(v * 100) / 100;
+    return {
+      s: this.slot, x: r2(this.pos.x), z: r2(this.pos.z), vx: r2(this.vel.x), vz: r2(this.vel.z),
+      ay: r2(this.aimYaw), m: this.nextMode || this.mode, hp: Math.ceil(this.hp), mh: this.maxHp, mi: this.missiles,
+      d: this.dead ? 1 : 0, k: this.kills,
+    };
+  }
+
+  applyNet(s) {
+    if (!this.netTarget) {
+      this.netTarget = new THREE.Vector3(s.x, 0, s.z);
+      this.pos.set(s.x, 0, s.z);
     }
+    this.netTarget.set(s.x, 0, s.z);
+    this.vel.set(s.vx, 0, s.vz);
+    this.netAimYaw = s.ay;
+    if (s.m !== (this.nextMode || this.mode) && this.transformT <= 0) {
+      this.nextMode = s.m;
+      this.transformT = TRANSFORM_TIME;
+    }
+    this.hp = s.hp;
+    this.maxHp = s.mh ?? this.maxHp;
+    this.missiles = s.mi;
+    this.kills = s.k;
+    const wasDead = this.dead;
+    this.dead = !!s.d;
+    if (wasDead && !this.dead) this.pos.copy(this.netTarget); // respawned: snap, don't glide across the map
+    this.root.visible = !this.dead;
+  }
+
+  /** Guest-side per-frame update: extrapolate by velocity, ease toward the snapshot, animate. */
+  netAnimate(dt) {
+    if (!this.netTarget) return;
+    this.netTarget.addScaledVector(this.vel, dt);
+    this.pos.addScaledVector(this.vel, dt);
+    const k = 1 - Math.exp(-12 * dt);
+    this.pos.x += (this.netTarget.x - this.pos.x) * k;
+    this.pos.z += (this.netTarget.z - this.pos.z) * k;
+    this.aimYaw = angleLerp(this.aimYaw, this.netAimYaw ?? this.aimYaw, 1 - Math.exp(-20 * dt));
+    this.animateTransform(dt);
+    this.animate(dt);
   }
 
   shotDir(from, spread = 0) {
-    const aim = this.game.aimPoint;
+    const aim = this.aim;
     let dx = aim.x - from.x, dz = aim.z - from.z;
     if (Math.hypot(dx, dz) < 4) { dx = Math.sin(this.aimYaw); dz = Math.cos(this.aimYaw); }
     const a = Math.atan2(dx, dz) + spread + (Math.random() - 0.5) * 0.03;
@@ -226,7 +287,7 @@ export class Player {
     }
     for (const [m, spread] of muzzles) {
       g.projectiles.spawn({
-        type: 'bullet', owner: 'player', pos: m, dir: this.shotDir(m, spread),
+        type: 'bullet', owner: 'player', ownerSlot: this.slot, pos: m, dir: this.shotDir(m, spread),
         speed: st.bulletSpeed, dmg: st.dmg, life: 0.9, radius: 0.5,
       });
       g.effects.muzzle(m);
@@ -237,9 +298,9 @@ export class Player {
   fireMissile() {
     const g = this.game;
     const from = this.pos.clone().setY(4.6);
-    const target = g.enemies.nearestTarget(g.aimPoint, 14);
+    const target = g.enemies.nearestTarget(this.aim, 14);
     g.projectiles.spawn({
-      type: 'missile', owner: 'player', pos: from, dir: this.shotDir(from, (Math.random() - 0.5) * 0.6),
+      type: 'missile', owner: 'player', ownerSlot: this.slot, pos: from, dir: this.shotDir(from, (Math.random() - 0.5) * 0.6),
       speed: 18, dmg: 42, splash: 4.5, life: 3, radius: 0.6, target,
     });
     g.audio.play('missile');
@@ -252,19 +313,18 @@ export class Player {
 
   heal(n) { this.hp = Math.min(this.maxHp, this.hp + n); }
 
-  damage(n) {
+  /** sourceSlot: the player who caused the damage (versus), if any. */
+  damage(n, sourceSlot) {
     const g = this.game;
     if (this.dead || g.state !== 'playing') return;
     this.hp -= n * this.stats.armor;
-    g.shake(0.25);
-    g.hud.hurt();
-    g.audio.play('hurt');
+    g.onPlayerHurt(this);
     if (this.hp <= 0) {
       this.hp = 0;
       this.dead = true;
       this.root.visible = false;
       g.effects.explosion(this.pos.clone().setY(2), 4);
-      g.onPlayerDead();
+      g.onPlayerDown(this, sourceSlot);
     }
   }
 }

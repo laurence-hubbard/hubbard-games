@@ -12,6 +12,36 @@ export class Pickups {
     this.list = [];
   }
 
+  /** Guest: match a snapshot list of {i, t, x, z}. */
+  applyNet(list) {
+    const seen = new Set(list.map((s) => s.i));
+    const have = new Set(this.list.map((it) => it.id));
+    for (const s of list) {
+      if (!have.has(s.i)) {
+        this.spawn(s.t, { x: s.x, z: s.z });
+        this.list[this.list.length - 1].id = s.i;
+      }
+    }
+    for (let i = this.list.length - 1; i >= 0; i--) {
+      if (!seen.has(this.list[i].id)) {
+        this.game.scene.remove(this.list[i].g);
+        this.list.splice(i, 1);
+      }
+    }
+  }
+
+  netState() {
+    return this.list.map((it) => ({ i: it.id, t: it.type, x: Math.round(it.g.position.x * 100) / 100, z: Math.round(it.g.position.z * 100) / 100 }));
+  }
+
+  /** Guest-side spin and bob. */
+  netAnimate(dt) {
+    for (const [i, it] of this.list.entries()) {
+      it.g.rotation.y += dt * 2;
+      it.g.position.y = 1.3 + Math.sin(this.game.time * 3 + i) * 0.25;
+    }
+  }
+
   spawn(type, pos) {
     const g = new THREE.Group();
     if (type === 'health') {
@@ -21,11 +51,12 @@ export class Pickups {
     }
     g.position.set(pos.x, 1.3, pos.z);
     this.game.scene.add(g);
-    this.list.push({ type, g, life: 25 });
+    const life = this.game.mode.pickupRespawnEvery ? Infinity : 25; // versus pickups stay until taken
+    this.list.push({ id: this.game.nextId(), type, g, life });
   }
 
   update(dt) {
-    const game = this.game, p = game.player;
+    const game = this.game;
     for (let i = this.list.length - 1; i >= 0; i--) {
       const it = this.list[i];
       it.life -= dt;
@@ -33,17 +64,21 @@ export class Pickups {
       it.g.position.y = 1.3 + Math.sin(game.time * 3 + i) * 0.25;
       it.g.visible = it.life > 5 || Math.floor(it.life * 8) % 2 === 0;
       let take = false;
-      if (!p.dead && Math.hypot(it.g.position.x - p.pos.x, it.g.position.z - p.pos.z) < 2.6) {
+      for (const p of game.players) {
+        if (take || p.dead || Math.hypot(it.g.position.x - p.pos.x, it.g.position.z - p.pos.z) >= 2.6) continue;
+        let text = null;
         if (it.type === 'health' && p.hp < p.maxHp) {
           p.heal(30);
-          game.hud.toast('+30 HULL');
-          take = true;
+          text = '+30 HULL';
         } else if (it.type === 'ammo' && p.missiles < MAX_MISSILES) {
           p.missiles = Math.min(MAX_MISSILES, p.missiles + 4);
-          game.hud.toast('+4 MISSILES');
-          take = true;
+          text = '+4 MISSILES';
         }
-        if (take) game.audio.play('pickup');
+        if (text) {
+          take = true;
+          game.toastFor(p, text);
+          game.audio.play('pickup');
+        }
       }
       if (take || it.life <= 0) {
         game.scene.remove(it.g);

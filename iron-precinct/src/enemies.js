@@ -10,6 +10,7 @@ const orangeGlow = new THREE.MeshBasicMaterial({ color: 0xff7a1a });
 class Enemy {
   constructor(game, type, pos, hp, radius) {
     this.game = game;
+    this.id = game.nextId();
     this.type = type;
     this.pos = pos.clone();
     this.pos.y = 0;
@@ -28,6 +29,8 @@ class Enemy {
     this.flashing = false;
     this.flashMats = [];
     this.seed = Math.random() * 100;
+    this.yaw = 0;
+    this.speed = 0;
     this.mesh = new THREE.Group();
     this.mesh.position.copy(this.pos);
     game.scene.add(this.mesh);
@@ -39,8 +42,10 @@ class Enemy {
     return m;
   }
 
-  damage(n) {
+  /** sourceSlot: the player whose shot did this, for kill credit. */
+  damage(n, sourceSlot) {
     if (!this.alive) return;
+    if (sourceSlot) this.lastHitBy = sourceSlot;
     this.hp -= n;
     this.flashT = 0.08;
     this.dormant = false;
@@ -53,16 +58,26 @@ class Enemy {
     g.scene.remove(this.mesh);
     g.effects.explosion(this.pos.clone().setY(this.deathY), this.boomSize);
     g.addScore(this.score);
+    const killer = this.lastHitBy && g.players[this.lastHitBy - 1];
+    if (killer && this.type !== 'crate') killer.kills++;
     if (Math.random() < this.dropChance) g.pickups.spawn(Math.random() < 0.5 ? 'health' : 'ammo', this.pos);
     this.onDeath?.();
   }
 
   baseUpdate(dt) {
-    const p = this.game.player;
-    this.dx = p.pos.x - this.pos.x;
-    this.dz = p.pos.z - this.pos.z;
-    this.dist = Math.hypot(this.dx, this.dz) || 0.0001;
-    if (this.dormant && this.dist < this.wakeRange && !p.dead) this.dormant = false;
+    const p = (this.target = this.game.nearestPlayer(this.pos));
+    if (p) {
+      this.dx = p.pos.x - this.pos.x;
+      this.dz = p.pos.z - this.pos.z;
+      this.dist = Math.hypot(this.dx, this.dz) || 0.0001;
+    } else {
+      this.dx = 0; this.dz = 1; this.dist = Infinity;
+    }
+    if (this.dormant && this.dist < this.wakeRange) this.dormant = false;
+    this.updateFlash(dt);
+  }
+
+  updateFlash(dt) {
     if (this.flashT > 0) this.flashT -= dt;
     const want = this.flashT > 0;
     if (want !== this.flashing) {
@@ -71,12 +86,50 @@ class Enemy {
     }
   }
 
+  /** Visual-only animation driven by pos/yaw/speed (runs on host and guest). */
+  animate(dt) {}
+
+  // --- network sync (host -> guest) ---
+  netState() {
+    const r2 = (v) => Math.round(v * 100) / 100;
+    const s = { i: this.id, t: this.type, x: r2(this.pos.x), z: r2(this.pos.z), y: r2(this.yaw), h: Math.ceil(this.hp) };
+    if (this.speed) s.sp = r2(this.speed);
+    if (this.isBoss) s.mh = this.maxHp;
+    return s;
+  }
+
+  applyNet(s) {
+    if (!this.netTarget) {
+      this.netTarget = new THREE.Vector3(s.x, 0, s.z);
+      this.pos.set(s.x, 0, s.z);
+      this.yaw = s.y;
+    }
+    this.netTarget.set(s.x, 0, s.z);
+    this.netYaw = s.y;
+    if (s.h < this.hp) this.flashT = 0.08;
+    this.hp = s.h;
+    if (s.mh) this.maxHp = s.mh;
+    this.speed = s.sp || 0;
+  }
+
+  /** Guest-side per-frame update: glide toward the latest snapshot, then animate. */
+  netAnimate(dt) {
+    if (this.netTarget) {
+      const k = 1 - Math.exp(-15 * dt);
+      this.pos.x += (this.netTarget.x - this.pos.x) * k;
+      this.pos.z += (this.netTarget.z - this.pos.z) * k;
+      this.yaw = angleLerp(this.yaw, this.netYaw, k);
+    }
+    this.updateFlash(dt);
+    this.animate(dt);
+  }
+
   canSeePlayer(y = 2) {
-    return this.game.level.lineOfSight(this.pos, this.game.player.pos, y);
+    return !!this.target && this.game.level.lineOfSight(this.pos, this.target.pos, y);
   }
 
   fireBolt(from, speed, dmg, yawOffset = 0) {
-    const p = this.game.player.pos;
+    const p = this.target.pos;
     const a = Math.atan2(p.x - from.x, p.z - from.z) + yawOffset;
     this.game.projectiles.spawn({
       type: 'bolt', owner: 'enemy', pos: from, dir: new THREE.Vector3(Math.sin(a), 0, Math.cos(a)),
@@ -112,11 +165,17 @@ export class Drone extends Enemy {
     this.mesh.add(box(0.3, 0.1, 0.3, eyeMat, 0, -0.8, 0));
   }
 
-  update(dt) {
-    this.baseUpdate(dt);
-    const g = this.game, t = g.time;
+  animate() {
+    const t = this.game.time;
     for (const r of this.rotors) r.scale.x = r.scale.z = 0.8 + 0.2 * Math.sin(t * 40 + this.seed);
     this.mesh.position.set(this.pos.x, this.alt + Math.sin(t * 3 + this.seed) * 0.3, this.pos.z);
+    this.mesh.rotation.y = this.yaw;
+  }
+
+  update(dt) {
+    this.baseUpdate(dt);
+    const g = this.game;
+    this.animate(dt);
     if (this.dormant) return;
     const nx = this.dx / this.dist, nz = this.dz / this.dist;
     let mx = 0, mz = 0;
@@ -129,10 +188,10 @@ export class Drone extends Enemy {
     this.pos.z += mz * 7 * dt;
     g.level.resolveCircle(this.pos, this.radius);
     g.enemies.separate(this);
-    this.mesh.rotation.y = Math.atan2(this.dx, this.dz);
+    this.yaw = Math.atan2(this.dx, this.dz);
 
     this.fireCd -= dt;
-    if (this.fireCd <= 0 && this.dist < 26 && !g.player.dead) {
+    if (this.fireCd <= 0 && this.dist < 26 && this.target) {
       if (this.canSeePlayer(this.alt)) {
         this.fireBolt(this.mesh.position.clone(), 20, 6);
         this.fireCd = 1.5 + Math.random() * 0.9;
@@ -164,22 +223,24 @@ export class Turret extends Enemy {
     this.mesh.add(this.head);
   }
 
+  animate() { this.head.rotation.y = this.yaw; }
+
   update(dt) {
     this.baseUpdate(dt);
     if (this.dormant) return;
     const g = this.game;
-    const yaw = Math.atan2(this.dx, this.dz);
-    this.head.rotation.y = angleLerp(this.head.rotation.y, yaw, 1 - Math.exp(-4 * dt));
+    this.yaw = angleLerp(this.yaw, Math.atan2(this.dx, this.dz), 1 - Math.exp(-4 * dt));
+    this.animate(dt);
     this.fireCd -= dt;
     if (this.burst > 0) {
       this.burstT -= dt;
       if (this.burstT <= 0) {
         this.burst--;
         this.burstT = 0.15;
-        const hy = this.head.rotation.y;
+        const hy = this.yaw;
         this.fireBolt(new THREE.Vector3(this.pos.x + Math.sin(hy) * 2, 1.4, this.pos.z + Math.cos(hy) * 2), 24, 7);
       }
-    } else if (this.fireCd <= 0 && this.dist < 32 && !g.player.dead) {
+    } else if (this.fireCd <= 0 && this.dist < 32 && this.target) {
       if (this.canSeePlayer(1.4)) { this.burst = 3; this.burstT = 0; this.fireCd = 2.6; }
       else this.fireCd = 0.6;
     }
@@ -218,12 +279,12 @@ export class Rammer extends Enemy {
 
   update(dt) {
     this.baseUpdate(dt);
-    if (this.dormant) return;
-    const g = this.game, p = g.player;
+    const g = this.game, p = this.target;
+    if (this.dormant || !p) return;
     if (this.state === 'chase') {
       this.yaw = angleLerp(this.yaw, Math.atan2(this.dx, this.dz), 1 - Math.exp(-2.5 * dt));
       this.speed = Math.min(this.speed + 18 * dt, 15);
-      if (this.dist < this.radius + p.radius + 0.4 && !p.dead) {
+      if (this.dist < this.radius + p.radius + 0.4) {
         p.damage(14);
         p.knock(this.dx / this.dist, this.dz / this.dist, 14);
         g.effects.sparks(p.pos.clone().setY(1.5), 0xffd04a, 10);
@@ -241,6 +302,10 @@ export class Rammer extends Enemy {
     this.pos.z += Math.cos(this.yaw) * this.speed * dt;
     if (g.level.resolveCircle(this.pos, this.radius)) this.speed *= 0.6;
     g.enemies.separate(this);
+    this.animate(dt);
+  }
+
+  animate(dt) {
     this.mesh.position.copy(this.pos);
     this.mesh.rotation.y = this.yaw;
     for (const w of this.wheels) w.rotation.x += this.speed * dt * 2;
@@ -280,13 +345,18 @@ export class Jammer extends Enemy {
     this.mesh.add(ring);
   }
 
-  update(dt) {
-    this.baseUpdate(dt);
-    const g = this.game, t = g.time;
+  animate(dt) {
+    const t = this.game.time;
     this.dish.rotation.y += dt * 1.5;
     this.core.scale.setScalar(1 + 0.25 * Math.sin(t * 6));
     this.ring.material.opacity = 0.35 + 0.3 * Math.sin(t * 4);
-    if (this.dormant || g.player.dead) return;
+  }
+
+  update(dt) {
+    this.baseUpdate(dt);
+    const g = this.game;
+    this.animate(dt);
+    if (this.dormant || !this.target) return;
     this.spawnT -= dt;
     if (this.spawnT <= 0 && this.dist < 50) {
       this.spawnT = 7;
@@ -353,25 +423,19 @@ export class Boss extends Enemy {
 
   update(dt) {
     this.baseUpdate(dt);
-    const g = this.game, p = g.player;
+    const g = this.game, p = this.target;
     const enraged = this.hp < this.maxHp * 0.5;
+    if (!p) { this.speed = 0; this.animate(dt); return; }
     this.yaw = angleLerp(this.yaw, Math.atan2(this.dx, this.dz), 1 - Math.exp(-1.2 * dt));
     let speed = 0;
     if (this.dist > 20) speed = enraged ? 6 : 4.5;
     else if (this.dist < 12) speed = -3;
+    this.speed = speed;
     this.pos.x += Math.sin(this.yaw) * speed * dt;
     this.pos.z += Math.cos(this.yaw) * speed * dt;
     g.level.resolveCircle(this.pos, this.radius);
-    this.walk += Math.abs(speed) * dt * 1.2 + dt * 0.5;
-    for (const l of this.legs) {
-      l.pivot.rotation.y = Math.sin(this.walk + l.phase) * 0.3;
-      l.pivot.position.y = 3.4 + Math.max(0, Math.sin(this.walk + l.phase)) * 0.4;
-    }
-    this.mesh.position.set(this.pos.x, Math.sin(this.walk * 2) * 0.1, this.pos.z);
-    this.mesh.rotation.y = this.yaw;
-    this.core.scale.setScalar(1 + 0.15 * Math.sin(g.time * (enraged ? 14 : 6)));
+    this.animate(dt);
 
-    if (p.dead) return;
     if (this.volley) {
       this.volley.t -= dt;
       if (this.volley.t <= 0) {
@@ -406,6 +470,18 @@ export class Boss extends Enemy {
       }
       this.attackT = enraged ? 2.2 : 3.2;
     }
+  }
+
+  animate(dt) {
+    const enraged = this.hp < this.maxHp * 0.5;
+    this.walk += Math.abs(this.speed) * dt * 1.2 + dt * 0.5;
+    for (const l of this.legs) {
+      l.pivot.rotation.y = Math.sin(this.walk + l.phase) * 0.3;
+      l.pivot.position.y = 3.4 + Math.max(0, Math.sin(this.walk + l.phase)) * 0.4;
+    }
+    this.mesh.position.set(this.pos.x, Math.sin(this.walk * 2) * 0.1, this.pos.z);
+    this.mesh.rotation.y = this.yaw;
+    this.core.scale.setScalar(1 + 0.15 * Math.sin(this.game.time * (enraged ? 14 : 6)));
   }
 
   onDeath() { this.game.onBossDestroyed(this); }
@@ -451,6 +527,32 @@ export class Enemies {
     this.list = this.list.filter((e) => e.alive);
   }
 
+  /** Guest: create / update / remove enemies to match a snapshot list. */
+  applyNet(list) {
+    const byId = new Map(this.list.map((e) => [e.id, e]));
+    const seen = new Set();
+    for (const s of list) {
+      seen.add(s.i);
+      let e = byId.get(s.i);
+      if (!e) {
+        e = new TYPES[s.t](this.game, new THREE.Vector3(s.x, 0, s.z));
+        e.id = s.i;
+        e.dormant = false;
+        this.list.push(e);
+        if (e.isBoss) this.game.boss = e;
+      }
+      e.applyNet(s);
+    }
+    for (const e of this.list) {
+      if (!seen.has(e.id)) { e.alive = false; this.game.scene.remove(e.mesh); }
+    }
+    this.list = this.list.filter((e) => e.alive);
+  }
+
+  netAnimate(dt) {
+    for (const e of this.list) e.netAnimate(dt);
+  }
+
   hitTest(pos, r) {
     for (const e of this.list) {
       if (e.alive && Math.hypot(pos.x - e.pos.x, pos.z - e.pos.z) < e.radius + r) return e;
@@ -493,12 +595,12 @@ export class Enemies {
     }
   }
 
-  damageArea(pos, radius, dmg) {
+  damageArea(pos, radius, dmg, sourceSlot) {
     for (const e of [...this.list]) {
       if (!e.alive) continue;
       const d = Math.hypot(pos.x - e.pos.x, pos.z - e.pos.z);
       const reach = radius + e.radius;
-      if (d < reach) e.damage(dmg * (1 - 0.5 * (d / reach)));
+      if (d < reach) e.damage(dmg * (1 - 0.5 * (d / reach)), sourceSlot);
     }
   }
 }

@@ -35,3 +35,21 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #05070c; fon
 #controls b { color: #ffd24a; }
 #screen-cta { margin-top: 26px; font-size: 20px; letter-spacing: 4px; color: #8ff7ff; animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: 0.35; } }
+
+/* Menus & lobby */
+button { font-family: inherit; letter-spacing: 3px; cursor: pointer; color: #cfe8ff; background: rgba(8, 14, 28, 0.8);
+  border: 1px solid rgba(95, 243, 255, 0.5); padding: 8px 18px; margin: 6px; font-size: 14px; }
+button:hover:not(:disabled) { background: rgba(43, 217, 255, 0.18); }
+button:disabled { opacity: 0.35; cursor: default; }
+button.big { font-size: 20px; padding: 12px 30px; }
+button.selected { background: rgba(43, 217, 255, 0.3); border-color: #8ff7ff; color: #fff; }
+#menu, #lobby { margin-top: 22px; }
+.slot { font-size: 16px; margin: 6px 0; letter-spacing: 2px; }
+.slot.on { color: #8fff9c; }
+.slot.off { color: #6c7f95; }
+.modes { margin: 14px 0 4px; }
+#lobby-mode-desc { color: #9cc6e6; font-size: 13px; min-height: 18px; }
+#title-msg, #lobby-msg { color: #ff8a5a; min-height: 20px; }
+#lobby-hint { color: #7fb6d9; font-size: 13px; }
+#stall { position: absolute; top: 45%; width: 100%; text-align: center; font-size: 26px; letter-spacing: 5px; color: #ffd24a;
+  text-shadow: 0 0 12px #000; animation: pulse 1.2s infinite; }

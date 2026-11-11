@@ -18,6 +18,7 @@
       <div class="bar"><div id="hp-fill"></div></div>
       <div id="mode" class="stat">MODE: WALKER</div>
       <div id="missiles" class="stat">MISSILES: 12</div>
+      <div id="partner" class="stat hidden"></div>
     </div>
     <div id="topcenter">
       <div id="objective"></div>
@@ -27,13 +28,14 @@
       </div>
     </div>
     <div id="topright" class="panel">
-      <div class="label">SCORE</div>
+      <div class="label" id="score-label">SCORE</div>
       <div id="score">0</div>
     </div>
     <canvas id="minimap" width="200" height="200"></canvas>
     <div id="banner"></div>
     <div id="toast"></div>
     <div id="vignette"></div>
+    <div id="stall" class="hidden">WAITING FOR PLAYER 1…</div>
   </div>
 
   <div id="crosshair" class="hidden"></div>
@@ -49,6 +51,23 @@
         <div><b>Right click</b> homing missiles</div>
         <div><b>Space / Q</b> transform walker ⇄ hover</div>
         <div><b>P / Esc</b> pause</div>
+      </div>
+      <div id="menu" class="hidden">
+        <button id="btn-solo" class="big">SOLO</button>
+        <button id="btn-2p" class="big">TWO-PLAYER</button>
+        <p id="title-msg"></p>
+      </div>
+      <div id="lobby" class="hidden">
+        <div id="lobby-p1" class="slot"></div>
+        <div id="lobby-p2" class="slot"></div>
+        <div class="modes">
+          <button id="btn-coop">CO-OP</button>
+          <button id="btn-versus">VERSUS</button>
+        </div>
+        <p id="lobby-mode-desc"></p>
+        <button id="btn-start" class="big">START</button>
+        <p id="lobby-hint"></p>
+        <p id="lobby-msg"></p>
       </div>
       <p id="screen-cta">CLICK TO DEPLOY</p>
     </div>

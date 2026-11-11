@@ -1,0 +1,62 @@
+<!doctype html>
+<html><body style="margin:0">
+<script type="module">
+import { check, openGame, sim, run, buildingOverlap } from './harness.js';
+
+run(async () => {
+  const f = await openGame('autostart');
+  const g = f.contentWindow.game;
+
+  check('solo_single_player', Array.isArray(g.players) && g.players.length === 1 && g.mode?.name === 'solo',
+    `players=${g.players?.length} mode=${g.mode?.name}`);
+
+  const p = g.player;
+  p.hp = p.maxHp = 100000; // invulnerable for the test
+
+  // Shooting: stand 10 south of a jammer, aim north, hold fire.
+  const jam = g.enemies.list.find((e) => e.type === 'jammer');
+  p.pos.set(jam.pos.x, 0, jam.pos.z + 10);
+  g.input.ndc.x = 0; g.input.ndc.y = 0.35;
+  g.input.mouse.left = true;
+  sim(g, 2.5);
+  g.input.mouse.left = false;
+  check('solo_shooting', jam.hp < 240, `jammer hp ${jam.hp}`);
+
+  // Transform.
+  g.input.justPressed.add('Space');
+  sim(g, 0.7);
+  check('solo_transform', p.mode === 'hover', `mode ${p.mode}`);
+
+  // Kill jammers -> boss.
+  for (const e of g.enemies.list.filter((e) => e.type === 'jammer')) e.damage(99999);
+  sim(g, 3.5);
+  const boss = g.boss;
+  check('solo_boss_spawns', !!boss && boss.alive);
+
+  // Missiles.
+  p.pos.set(boss.pos.x, 0, boss.pos.z + 22);
+  g.input.ndc.x = 0; g.input.ndc.y = 0.4;
+  sim(g, 1.5);
+  const before = boss.hp;
+  g.input.mouse.right = true;
+  sim(g, 2);
+  g.input.mouse.right = false;
+  check('solo_missiles_hit_boss', before - boss.hp >= 100, `boss hp ${before} -> ${boss.hp}`);
+
+  // Win.
+  boss.damage(999999);
+  sim(g, 3.8);
+  check('solo_win', g.state === 'won', `state ${g.state}`);
+
+  // Drive along walls in hover mode; never clip into buildings.
+  g.state = 'playing';
+  let worst = 0;
+  for (const k of ['KeyW', 'KeyD', 'KeyS', 'KeyA', 'KeyW', 'KeyA']) {
+    g.input.keys.add(k);
+    sim(g, 3.5, () => { worst = Math.max(worst, buildingOverlap(g, p)); });
+    g.input.keys.delete(k);
+  }
+  check('solo_no_wall_clipping', worst < 0.01, `max overlap ${worst.toFixed(3)}`);
+});
+</script>
+</body></html>
